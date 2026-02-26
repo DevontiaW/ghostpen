@@ -25,7 +25,7 @@ interface EditorProps {
   value: string;
   onChange: (value: string) => void;
   onIssuesFound: (issues: GrammarIssue[], stats: CheckResult["stats"]) => void;
-  onSelectionChange: (text: string) => void;
+  onSelectionChange: (text: string, from: number, to: number) => void;
 }
 
 function mapSeverity(severity: string): "error" | "warning" | "info" {
@@ -263,9 +263,9 @@ export default function Editor({ value, onChange, onIssuesFound, onSelectionChan
       const { from, to } = update.state.selection.main;
       if (from !== to) {
         const selected = update.state.sliceDoc(from, to);
-        onSelectionChange(selected);
+        onSelectionChange(selected, from, to);
       } else {
-        onSelectionChange("");
+        onSelectionChange("", from, to);
       }
     }
   });
