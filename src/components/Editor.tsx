@@ -39,6 +39,8 @@ const highlightMark = Decoration.mark({ class: "cm-issue-highlight" });
 const highlightField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(decorations, tr) {
+    // Map existing decorations through document changes so positions stay valid
+    decorations = decorations.map(tr.changes);
     for (const e of tr.effects) {
       if (e.is(highlightEffect)) {
         if (e.value === null) return Decoration.none;
@@ -68,8 +70,9 @@ let quickFixCallback: ((pos: number) => void) | null = null;
 const quickFixKeymap = keymap.of([{
   key: "Mod-.",
   run: (view) => {
+    if (!quickFixCallback) return false;
     const pos = view.state.selection.main.head;
-    if (quickFixCallback) quickFixCallback(pos);
+    quickFixCallback(pos);
     return true;
   }
 }]);

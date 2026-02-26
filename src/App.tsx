@@ -28,10 +28,16 @@ function App() {
   const [llmStatus, setLlmStatus] = useState<LlmStatus>({ available: false, provider: "none", model: "" });
   const [activeMode, setActiveMode] = useState<string | null>(null);
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scrollToIssue = useCallback((issue: GrammarIssue) => {
     const view = editorRef.current?.view;
     if (!view) return;
+
+    // Cancel any pending highlight clear from a previous click
+    if (highlightTimerRef.current) {
+      clearTimeout(highlightTimerRef.current);
+    }
 
     // Scroll the error span into view (centered vertically)
     view.dispatch({
@@ -47,13 +53,14 @@ function App() {
     });
 
     // Clear highlight after 1.5 seconds
-    setTimeout(() => {
+    highlightTimerRef.current = setTimeout(() => {
       // Guard against unmounted editor
       if (editorRef.current?.view) {
         editorRef.current.view.dispatch({
           effects: highlightEffect.of(null),
         });
       }
+      highlightTimerRef.current = null;
     }, 1500);
   }, []);
 
@@ -104,8 +111,11 @@ function App() {
   const handleQuickFix = useCallback((pos: number) => {
     const issue = issues.find(i => pos >= i.start && pos <= i.end);
     if (!issue || issue.suggestions.length === 0) return;
-    applySuggestion(issue, issue.suggestions[0]);
-  }, [issues]);
+    // Inline the fix application using current text to avoid stale closure
+    const before = text.substring(0, issue.start);
+    const after = text.substring(issue.end);
+    setText(before + issue.suggestions[0] + after);
+  }, [issues, text]);
 
   const applySuggestion = (issue: GrammarIssue, suggestion: string) => {
     const before = text.substring(0, issue.start);
