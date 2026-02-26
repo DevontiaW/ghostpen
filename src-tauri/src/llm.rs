@@ -2,8 +2,10 @@ use serde::{Deserialize, Serialize};
 use crate::{RewriteResult, LlmStatus};
 
 // Both Ollama and LM Studio serve OpenAI-compatible API on these ports
-const LMSTUDIO_URL: &str = "http://localhost:1234";
-const OLLAMA_LOCAL_URL: &str = "http://localhost:11434";
+// Use 127.0.0.1 instead of localhost — Windows can resolve localhost to IPv6 ::1
+// while LM Studio / Ollama only bind to IPv4
+const LMSTUDIO_URL: &str = "http://127.0.0.1:1234";
+const OLLAMA_LOCAL_URL: &str = "http://127.0.0.1:11434";
 const OLLAMA_PI_URL: &str = "http://192.168.1.96:11434"; // Pi 5 LAN fallback
 
 // Default models (user can change later)
@@ -175,7 +177,7 @@ pub async fn rewrite(text: &str, mode: &str) -> Result<RewriteResult, Box<dyn st
             stream: false,
             temperature: 0.3,
         })
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(180))
         .send()
         .await?
         .json::<ChatResponse>()
