@@ -2836,6 +2836,7 @@ dependencies = [
 name = "ghostpen"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "harper-core",
  "reqwest 0.12.28",
  "serde",

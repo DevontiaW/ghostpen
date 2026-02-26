@@ -117,6 +117,12 @@ async fn check_llm_status() -> Result<LlmStatus, String> {
     llm::check_status().await.map_err(|e| e.to_string())
 }
 
+/// Launch LM Studio in the background
+#[tauri::command]
+fn launch_llm() -> Result<String, String> {
+    llm::launch_lm_studio()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -125,6 +131,7 @@ pub fn run() {
             check_grammar,
             rewrite_text,
             check_llm_status,
+            launch_llm,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

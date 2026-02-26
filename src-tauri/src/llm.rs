@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use crate::{RewriteResult, LlmStatus};
 
 // Both Ollama and LM Studio serve OpenAI-compatible API on these ports
-const OLLAMA_URL: &str = "http://localhost:11434";
 const LMSTUDIO_URL: &str = "http://localhost:1234";
+const OLLAMA_LOCAL_URL: &str = "http://localhost:11434";
+const OLLAMA_PI_URL: &str = "http://192.168.1.96:11434"; // Pi 5 LAN fallback
 
 // Default models (user can change later)
 const OLLAMA_MODEL: &str = "qwen2.5:3b";
@@ -47,7 +48,7 @@ async fn detect_provider() -> Result<(Provider, String), Box<dyn std::error::Err
     let client = reqwest::Client::new();
     let timeout = std::time::Duration::from_secs(2);
 
-    // Try LM Studio first (more common for desktop users)
+    // Try LM Studio first (most common for desktop users)
     if let Ok(resp) = client
         .get(format!("{}/v1/models", LMSTUDIO_URL))
         .timeout(timeout)
@@ -59,19 +60,64 @@ async fn detect_provider() -> Result<(Provider, String), Box<dyn std::error::Err
         }
     }
 
-    // Try Ollama
+    // Try local Ollama
     if let Ok(resp) = client
-        .get(OLLAMA_URL)
+        .get(OLLAMA_LOCAL_URL)
         .timeout(timeout)
         .send()
         .await
     {
         if resp.status().is_success() {
-            return Ok((Provider::Ollama, OLLAMA_URL.to_string()));
+            return Ok((Provider::Ollama, OLLAMA_LOCAL_URL.to_string()));
         }
     }
 
-    Err("No local LLM server found. Install Ollama or LM Studio.".into())
+    // Try Pi Ollama (LAN fallback)
+    if let Ok(resp) = client
+        .get(OLLAMA_PI_URL)
+        .timeout(timeout)
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            return Ok((Provider::Ollama, OLLAMA_PI_URL.to_string()));
+        }
+    }
+
+    Err("No LLM server found. Install Ollama or LM Studio, or ensure Pi is on LAN.".into())
+}
+
+/// Attempt to launch LM Studio in the background
+pub fn launch_lm_studio() -> Result<String, String> {
+    // Try common LM Studio paths on Windows
+    let paths = [
+        dirs::home_dir().map(|h| h.join(".lmstudio/bin/lms.exe")),
+        dirs::data_local_dir().map(|d| d.join("Programs/LM Studio/LM Studio.exe")),
+    ];
+
+    for maybe_path in &paths {
+        if let Some(path) = maybe_path {
+            if path.exists() {
+                // lms CLI: start the server in background
+                if path.to_string_lossy().contains("lms") {
+                    match std::process::Command::new(path)
+                        .args(["server", "start"])
+                        .spawn()
+                    {
+                        Ok(_) => return Ok(format!("LM Studio server starting via {}", path.display())),
+                        Err(e) => return Err(format!("Failed to launch: {}", e)),
+                    }
+                }
+                // GUI path: launch the app
+                match std::process::Command::new(path).spawn() {
+                    Ok(_) => return Ok(format!("LM Studio launching from {}", path.display())),
+                    Err(e) => return Err(format!("Failed to launch: {}", e)),
+                }
+            }
+        }
+    }
+
+    Err("LM Studio not found. Install from https://lmstudio.ai".to_string())
 }
 
 pub async fn check_status() -> Result<LlmStatus, Box<dyn std::error::Error + Send + Sync>> {
