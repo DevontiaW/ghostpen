@@ -1,0 +1,143 @@
+[
+  {
+    "text": "I has went to the store yesterday.",
+    "expected_issues": [
+      { "approximate_text": "has went", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "The recieve button dont work properly.",
+    "expected_issues": [
+      { "approximate_text": "recieve", "type": "spelling" },
+      { "approximate_text": "dont", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "She dont like the the new design at all.",
+    "expected_issues": [
+      { "approximate_text": "dont", "type": "grammar" },
+      { "approximate_text": "the the", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "Their going to the park with there friends over they're.",
+    "expected_issues": [
+      { "approximate_text": "Their", "type": "grammar" },
+      { "approximate_text": "there", "type": "grammar" },
+      { "approximate_text": "they're", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "The team have been working on this project since monday.",
+    "expected_issues": [
+      { "approximate_text": "have", "type": "grammar" },
+      { "approximate_text": "monday", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "He definately should of known better than that.",
+    "expected_issues": [
+      { "approximate_text": "definately", "type": "spelling" },
+      { "approximate_text": "should of", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "Me and him went to store to buy groceries.",
+    "expected_issues": [
+      { "approximate_text": "Me and him", "type": "grammar" },
+      { "approximate_text": "to store", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "The meeting was cancelled, the team went home early.",
+    "expected_issues": [
+      { "approximate_text": "cancelled, the", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "Each of the students need to submit their assignments by friday.",
+    "expected_issues": [
+      { "approximate_text": "need", "type": "grammar" },
+      { "approximate_text": "friday", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "The company released it's annual report last wendsday.",
+    "expected_issues": [
+      { "approximate_text": "it's", "type": "grammar" },
+      { "approximate_text": "wendsday", "type": "spelling" }
+    ]
+  },
+  {
+    "text": "I could care less about the the outcome of this debate.",
+    "expected_issues": [
+      { "approximate_text": "could care less", "type": "grammar" },
+      { "approximate_text": "the the", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "Him and her was supposed to arrive at 3pm but didnt show up.",
+    "expected_issues": [
+      { "approximate_text": "Him and her", "type": "grammar" },
+      { "approximate_text": "was", "type": "grammar" },
+      { "approximate_text": "didnt", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "The data show's that the patient's are improving noticably.",
+    "expected_issues": [
+      { "approximate_text": "show's", "type": "grammar" },
+      { "approximate_text": "patient's", "type": "grammar" },
+      { "approximate_text": "noticably", "type": "spelling" }
+    ]
+  },
+  {
+    "text": "Irregardless of the results we should procede with the plan.",
+    "expected_issues": [
+      { "approximate_text": "Irregardless", "type": "grammar" },
+      { "approximate_text": "procede", "type": "spelling" }
+    ]
+  },
+  {
+    "text": "A person should always brush their teeths before bed.",
+    "expected_issues": [
+      { "approximate_text": "teeths", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "The affect of the policy change was immediatly visible.",
+    "expected_issues": [
+      { "approximate_text": "affect", "type": "grammar" },
+      { "approximate_text": "immediatly", "type": "spelling" }
+    ]
+  },
+  {
+    "text": "She was walking down the street she saw a beautiful garden.",
+    "expected_issues": [
+      { "approximate_text": "street she", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "I think your the best candidiate for this job.",
+    "expected_issues": [
+      { "approximate_text": "your", "type": "grammar" },
+      { "approximate_text": "candidiate", "type": "spelling" }
+    ]
+  },
+  {
+    "text": "We was going to the libary to study for the the exam.",
+    "expected_issues": [
+      { "approximate_text": "was", "type": "grammar" },
+      { "approximate_text": "libary", "type": "spelling" },
+      { "approximate_text": "the the", "type": "grammar" }
+    ]
+  },
+  {
+    "text": "Its important to seperate fact from fiction in todays media.",
+    "expected_issues": [
+      { "approximate_text": "Its", "type": "grammar" },
+      { "approximate_text": "seperate", "type": "spelling" },
+      { "approximate_text": "todays", "type": "grammar" }
+    ]
+  }
+]
