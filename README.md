@@ -21,7 +21,6 @@ Ghostpen is a desktop writing tool that checks grammar instantly and offers AI-p
 - **Selection-aware** — Select specific text to rewrite just that portion, or rewrite the whole document
 - **Works with Ollama or LM Studio** — Bring your own model. Auto-detects which is running
 - **LM Studio auto-launch** — One-click button to start LM Studio if it's installed but not running
-- **Pi/LAN fallback** — Can use Ollama running on another machine on your local network
 
 ### Quality Infrastructure
 - **Feedback loop** — Rate rewrites (Good/Bad) to build a local dataset for tracking quality

@@ -6,7 +6,6 @@ use crate::{RewriteResult, LlmStatus};
 // while LM Studio / Ollama only bind to IPv4
 const LMSTUDIO_URL: &str = "http://127.0.0.1:1234";
 const OLLAMA_LOCAL_URL: &str = "http://127.0.0.1:11434";
-const OLLAMA_PI_URL: &str = "http://192.168.1.96:11434"; // Pi 5 LAN fallback
 
 // Default models (user can change later)
 const OLLAMA_MODEL: &str = "qwen2.5:3b";
@@ -74,19 +73,7 @@ async fn detect_provider() -> Result<(Provider, String), Box<dyn std::error::Err
         }
     }
 
-    // Try Pi Ollama (LAN fallback)
-    if let Ok(resp) = client
-        .get(OLLAMA_PI_URL)
-        .timeout(timeout)
-        .send()
-        .await
-    {
-        if resp.status().is_success() {
-            return Ok((Provider::Ollama, OLLAMA_PI_URL.to_string()));
-        }
-    }
-
-    Err("No LLM server found. Install Ollama or LM Studio, or ensure Pi is on LAN.".into())
+    Err("No LLM server found. Install Ollama or LM Studio.".into())
 }
 
 /// Attempt to launch LM Studio in the background

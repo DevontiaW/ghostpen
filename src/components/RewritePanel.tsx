@@ -55,9 +55,11 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, onApply, o
           {rewriteResult.explanation && (
             <div className="rewrite-explanation">{rewriteResult.explanation}</div>
           )}
-          {rewriteResult.rewritten && (
+          {(rewriteResult.rewritten || rewriteResult.explanation) && (
             <div className="rewrite-actions">
-              <button className="btn-apply" onClick={onApply}>Apply</button>
+              {rewriteResult.rewritten && mode !== "explain" && (
+                <button className="btn-apply" onClick={onApply}>Apply</button>
+              )}
               <button className="toolbar-btn" onClick={onDismiss}>Dismiss</button>
               <div className="feedback-group">
                 <button
