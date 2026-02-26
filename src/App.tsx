@@ -18,6 +18,7 @@ function App() {
   const [issues, setIssues] = useState<GrammarIssue[]>([]);
   const [stats, setStats] = useState({ word_count: 0, sentence_count: 0, issue_count: 0 });
   const [selectedText, setSelectedText] = useState("");
+  const [selectionRange, setSelectionRange] = useState<{ from: number; to: number } | null>(null);
   const [rewriteResult, setRewriteResult] = useState<RewriteResult | null>(null);
   const [rewriteLoading, setRewriteLoading] = useState(false);
   const [llmStatus, setLlmStatus] = useState<LlmStatus>({ available: false, provider: "none", model: "" });
@@ -37,8 +38,9 @@ function App() {
     setStats(newStats);
   }, []);
 
-  const handleSelectionChange = useCallback((selected: string) => {
+  const handleSelectionChange = useCallback((selected: string, from: number, to: number) => {
     setSelectedText(selected);
+    setSelectionRange(selected ? { from, to } : null);
     if (!selected) setRewriteResult(null);
   }, []);
 
@@ -75,17 +77,17 @@ function App() {
 
   const applyRewrite = () => {
     if (!rewriteResult?.rewritten) return;
-    if (selectedText) {
-      const start = text.indexOf(selectedText);
-      if (start >= 0) {
-        const newText = text.substring(0, start) + rewriteResult.rewritten + text.substring(start + selectedText.length);
-        setText(newText);
-      }
+    if (selectionRange) {
+      const newText = text.substring(0, selectionRange.from)
+        + rewriteResult.rewritten
+        + text.substring(selectionRange.to);
+      setText(newText);
     } else {
       setText(rewriteResult.rewritten);
     }
     setRewriteResult(null);
     setSelectedText("");
+    setSelectionRange(null);
   };
 
   return (
