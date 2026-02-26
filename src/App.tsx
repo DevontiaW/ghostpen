@@ -1,28 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import Editor from "./components/Editor";
+import IssueSidebar from "./components/IssueSidebar";
+import RewritePanel from "./components/RewritePanel";
+import type { GrammarIssue, CheckResult } from "./components/Editor";
+import type { RewriteResult } from "./components/RewritePanel";
 import "./App.css";
-
-interface GrammarIssue {
-  start: number;
-  end: number;
-  message: string;
-  suggestions: string[];
-  severity: string;
-}
-
-interface CheckResult {
-  issues: GrammarIssue[];
-  stats: {
-    word_count: number;
-    sentence_count: number;
-    issue_count: number;
-  };
-}
-
-interface RewriteResult {
-  rewritten: string;
-  explanation: string;
-}
 
 interface LlmStatus {
   available: boolean;
@@ -39,10 +22,8 @@ function App() {
   const [rewriteLoading, setRewriteLoading] = useState(false);
   const [llmStatus, setLlmStatus] = useState<LlmStatus>({ available: false, provider: "none", model: "" });
   const [activeMode, setActiveMode] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  // Check LLM status on mount
+  // Check LLM status on mount + poll every 30s
   useEffect(() => {
     invoke<LlmStatus>("check_llm_status").then(setLlmStatus).catch(console.error);
     const interval = setInterval(() => {
@@ -51,36 +32,15 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Debounced grammar check
-  const checkGrammar = useCallback(async (value: string) => {
-    if (!value.trim()) {
-      setIssues([]);
-      setStats({ word_count: 0, sentence_count: 0, issue_count: 0 });
-      return;
-    }
-    try {
-      const result = await invoke<CheckResult>("check_grammar", { text: value });
-      setIssues(result.issues);
-      setStats(result.stats);
-    } catch (err) {
-      console.error("Grammar check failed:", err);
-    }
+  const handleIssuesFound = useCallback((newIssues: GrammarIssue[], newStats: CheckResult["stats"]) => {
+    setIssues(newIssues);
+    setStats(newStats);
   }, []);
 
-  const handleTextChange = (value: string) => {
-    setText(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => checkGrammar(value), 300);
-  };
-
-  const handleSelect = () => {
-    const el = textareaRef.current;
-    if (el) {
-      const selected = el.value.substring(el.selectionStart, el.selectionEnd);
-      setSelectedText(selected);
-      if (!selected) setRewriteResult(null);
-    }
-  };
+  const handleSelectionChange = useCallback((selected: string) => {
+    setSelectedText(selected);
+    if (!selected) setRewriteResult(null);
+  }, []);
 
   const handleRewrite = async (mode: string) => {
     const targetText = selectedText || text;
@@ -111,7 +71,6 @@ function App() {
     const after = text.substring(issue.end);
     const newText = before + suggestion + after;
     setText(newText);
-    checkGrammar(newText);
   };
 
   const applyRewrite = () => {
@@ -121,25 +80,12 @@ function App() {
       if (start >= 0) {
         const newText = text.substring(0, start) + rewriteResult.rewritten + text.substring(start + selectedText.length);
         setText(newText);
-        checkGrammar(newText);
       }
     } else {
       setText(rewriteResult.rewritten);
-      checkGrammar(rewriteResult.rewritten);
     }
     setRewriteResult(null);
     setSelectedText("");
-  };
-
-  const getIssueSnippet = (issue: GrammarIssue): string => {
-    return text.substring(issue.start, issue.end);
-  };
-
-  const issueSeverityClass = (severity: string): string => {
-    const s = severity.toLowerCase();
-    if (s.includes("error") || s.includes("spell")) return "error";
-    if (s.includes("style") || s.includes("readability")) return "style";
-    return "warning";
   };
 
   return (
@@ -198,95 +144,32 @@ function App() {
             )}
           </div>
 
-          <div className="editor-container">
-            <textarea
-              ref={textareaRef}
-              className="editor-textarea"
-              value={text}
-              onChange={(e) => handleTextChange(e.target.value)}
-              onSelect={handleSelect}
-              placeholder={"Start writing, or paste your text here.\n\nGhostpen checks grammar instantly using Harper \u2014 everything stays on your machine.\n\nSelect text and click a rewrite button to get AI-powered suggestions from your local LLM (Ollama or LM Studio).\n\nNo cloud. No surveillance. No keystrokes logged. Just better writing."}
-              spellCheck={false}
-            />
-          </div>
+          <Editor
+            value={text}
+            onChange={setText}
+            onIssuesFound={handleIssuesFound}
+            onSelectionChange={handleSelectionChange}
+          />
         </div>
 
         <div className="sidebar">
-          <div className="sidebar-header">
-            Issues {issues.length > 0 && `(${issues.length})`}
-          </div>
+          <IssueSidebar
+            issues={issues}
+            text={text}
+            onApplySuggestion={applySuggestion}
+          />
 
-          <div className="sidebar-content">
-            {issues.length === 0 && text.trim() && (
-              <div className="empty-state">
-                <div className="empty-state-text">No issues found.</div>
-              </div>
-            )}
-
-            {issues.length === 0 && !text.trim() && (
-              <div className="empty-state">
-                <div className="empty-state-text">
-                  Type or paste text to check for grammar, spelling, and style issues.
-                </div>
-              </div>
-            )}
-
-            {issues.map((issue, i) => (
-              <div key={i} className={`issue-card ${issueSeverityClass(issue.severity)}`}>
-                <div className="issue-text">
-                  <mark>{getIssueSnippet(issue)}</mark>
-                </div>
-                <div className="issue-message">{issue.message}</div>
-                {issue.suggestions.length > 0 && (
-                  <div className="issue-suggestions">
-                    {issue.suggestions.map((s, j) => (
-                      <button
-                        key={j}
-                        className="suggestion-chip"
-                        onClick={() => applySuggestion(issue, s)}
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {(rewriteResult || rewriteLoading) && (
-            <div className="rewrite-panel">
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#6d28d9" }}>
-                {rewriteLoading ? (
-                  <span><span className="spinner" /> Thinking...</span>
-                ) : (
-                  "Suggestion"
-                )}
-              </div>
-
-              {rewriteResult && (
-                <div className="rewrite-result">
-                  {rewriteResult.rewritten && (
-                    <div className="rewrite-text">{rewriteResult.rewritten}</div>
-                  )}
-                  {rewriteResult.explanation && (
-                    <div className="rewrite-explanation">{rewriteResult.explanation}</div>
-                  )}
-                  {rewriteResult.rewritten && (
-                    <div className="rewrite-actions">
-                      <button className="btn-apply" onClick={applyRewrite}>Apply</button>
-                      <button className="toolbar-btn" onClick={() => setRewriteResult(null)}>Dismiss</button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          <RewritePanel
+            rewriteResult={rewriteResult}
+            rewriteLoading={rewriteLoading}
+            onApply={applyRewrite}
+            onDismiss={() => setRewriteResult(null)}
+          />
         </div>
       </div>
 
       <div className="footer">
-        <span>Ghostpen v0.1.0 -- Your writing never leaves your machine</span>
+        <span>Ghostpen v0.2.0 -- Your writing never leaves your machine</span>
         <span>
           {llmStatus.available
             ? `${llmStatus.provider} (${llmStatus.model})`
