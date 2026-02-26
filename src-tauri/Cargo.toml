@@ -1,0 +1,22 @@
+[package]
+name = "ghostpen"
+version = "0.1.0"
+description = "Open-source, local-first writing assistant. Your writing never leaves your machine."
+authors = ["Textstone Labs"]
+edition = "2021"
+
+[lib]
+name = "ghostpen_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+harper-core = "1"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
