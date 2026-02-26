@@ -27,6 +27,7 @@ function App() {
   const [rewriteLoading, setRewriteLoading] = useState(false);
   const [llmStatus, setLlmStatus] = useState<LlmStatus>({ available: false, provider: "none", model: "" });
   const [activeMode, setActiveMode] = useState<string | null>(null);
+  const [llmLaunching, setLlmLaunching] = useState(false);
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -148,6 +149,45 @@ function App() {
             <div className="status-dot" />
             {llmStatus.available ? `${llmStatus.provider}` : "No LLM"}
           </div>
+          {!llmStatus.available && !llmLaunching && (
+            <button
+              className="launch-llm-btn"
+              onClick={async () => {
+                setLlmLaunching(true);
+                try {
+                  await invoke<string>("launch_llm");
+                } catch (e) {
+                  console.error("Failed to launch LLM:", e);
+                  setLlmLaunching(false);
+                  return; // Don't poll if launch failed
+                }
+                // Poll for LLM to come online (up to 30s)
+                let attempts = 0;
+                const poll = setInterval(async () => {
+                  attempts++;
+                  try {
+                    const status = await invoke<LlmStatus>("check_llm_status");
+                    if (status.available) {
+                      setLlmStatus(status);
+                      setLlmLaunching(false);
+                      clearInterval(poll);
+                    }
+                  } catch { /* ignore */ }
+                  if (attempts >= 15) {
+                    setLlmLaunching(false);
+                    clearInterval(poll);
+                  }
+                }, 2000);
+              }}
+            >
+              Launch LM Studio
+            </button>
+          )}
+          {llmLaunching && (
+            <span className="llm-launching">
+              <span className="spinner" /> Starting LLM...
+            </span>
+          )}
         </div>
         <div className="stats">
           <div className="stat-item">
