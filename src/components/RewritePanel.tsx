@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface RewriteResult {
   rewritten: string;
@@ -27,11 +27,13 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, onApply, o
     setTimeout(() => setShowThanks(false), 1000);
   };
 
-  // Reset when new result arrives
-  if (!rewriteResult && feedbackGiven) {
-    setFeedbackGiven(false);
-    setShowThanks(false);
-  }
+  // Reset when result is dismissed
+  useEffect(() => {
+    if (!rewriteResult) {
+      setFeedbackGiven(false);
+      setShowThanks(false);
+    }
+  }, [rewriteResult]);
 
   if (!rewriteResult && !rewriteLoading) return null;
 

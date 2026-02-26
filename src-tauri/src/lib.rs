@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use harper_core::linting::{LintGroup, Linter};
 use harper_core::spell::FstDictionary;
 use harper_core::{Document, Dialect};
+use std::io::Write;
 use std::sync::Arc;
 
 mod audit;
