@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { EditorView, Decoration, type DecorationSet } from "@codemirror/view";
+import { EditorView, Decoration, type DecorationSet, keymap } from "@codemirror/view";
 import { StateEffect, StateField } from "@codemirror/state";
 import { linter, type Diagnostic, lintGutter } from "@codemirror/lint";
 import { invoke } from "@tauri-apps/api/core";
@@ -28,6 +28,7 @@ interface EditorProps {
   onIssuesFound: (issues: GrammarIssue[], stats: CheckResult["stats"]) => void;
   onSelectionChange: (text: string, from: number, to: number) => void;
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
+  onQuickFix?: (pos: number) => void;
 }
 
 // --- Highlight effect system for sidebar-to-editor sync ---
@@ -60,6 +61,18 @@ function mapSeverity(severity: string): "error" | "warning" | "info" {
 
 // Store latest issues callback in a ref so the linter closure can access it
 let issuesCallback: ((issues: GrammarIssue[], stats: CheckResult["stats"]) => void) | null = null;
+
+// Module-level callback for quick fix (same pattern as issuesCallback)
+let quickFixCallback: ((pos: number) => void) | null = null;
+
+const quickFixKeymap = keymap.of([{
+  key: "Mod-.",
+  run: (view) => {
+    const pos = view.state.selection.main.head;
+    if (quickFixCallback) quickFixCallback(pos);
+    return true;
+  }
+}]);
 
 const grammarLinter = linter(
   async (view) => {
@@ -266,7 +279,7 @@ const ghostpenDarkTheme = EditorView.theme({
   },
 }, { dark: true });
 
-export default function Editor({ value, onChange, onIssuesFound, onSelectionChange, editorRef }: EditorProps) {
+export default function Editor({ value, onChange, onIssuesFound, onSelectionChange, editorRef, onQuickFix }: EditorProps) {
   const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
   // Keep the issues callback in sync
@@ -274,6 +287,12 @@ export default function Editor({ value, onChange, onIssuesFound, onSelectionChan
     issuesCallback = onIssuesFound;
     return () => { issuesCallback = null; };
   }, [onIssuesFound]);
+
+  // Keep the quick fix callback in sync
+  useEffect(() => {
+    quickFixCallback = onQuickFix || null;
+    return () => { quickFixCallback = null; };
+  }, [onQuickFix]);
 
   const handleChange = useCallback((val: string) => {
     onChange(val);
@@ -293,6 +312,7 @@ export default function Editor({ value, onChange, onIssuesFound, onSelectionChan
   });
 
   const extensions = [
+    quickFixKeymap,
     grammarLinter,
     lintGutter(),
     selectionListener,

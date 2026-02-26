@@ -101,6 +101,12 @@ function App() {
     }
   };
 
+  const handleQuickFix = useCallback((pos: number) => {
+    const issue = issues.find(i => pos >= i.start && pos <= i.end);
+    if (!issue || issue.suggestions.length === 0) return;
+    applySuggestion(issue, issue.suggestions[0]);
+  }, [issues]);
+
   const applySuggestion = (issue: GrammarIssue, suggestion: string) => {
     const before = text.substring(0, issue.start);
     const after = text.substring(issue.end);
@@ -185,6 +191,7 @@ function App() {
             onIssuesFound={handleIssuesFound}
             onSelectionChange={handleSelectionChange}
             editorRef={editorRef}
+            onQuickFix={handleQuickFix}
           />
         </div>
 
