@@ -3,7 +3,6 @@ use harper_core::linting::{LintGroup, Linter};
 use harper_core::spell::FstDictionary;
 use harper_core::{Document, Dialect};
 use std::sync::Arc;
-use std::io::Write;
 
 mod audit;
 mod llm;
