@@ -158,26 +158,23 @@
 
 .editor-container {
   flex: 1;
-  padding: 24px;
-  overflow-y: auto;
+  overflow: hidden;
+  position: relative;
 }
 
-.editor-textarea {
-  width: 100%;
+/* CodeMirror fills the container */
+.editor-container .cm-editor {
   height: 100%;
-  min-height: 300px;
-  border: none;
-  outline: none;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 16px;
-  line-height: 1.8;
-  color: #1a1a2e;
-  background: transparent;
-  resize: none;
 }
 
-.editor-textarea::placeholder {
+.editor-container .cm-scroller {
+  overflow: auto;
+}
+
+/* Placeholder styling */
+.editor-container .cm-placeholder {
   color: #9ca3af;
+  font-style: normal;
 }
 
 /* Sidebar */
@@ -390,11 +387,11 @@
     border-color: #2d2d3a;
   }
 
-  .editor-textarea {
-    color: #e5e7eb;
+  .editor-container .cm-editor {
+    background: transparent;
   }
 
-  .editor-textarea::placeholder {
+  .editor-container .cm-placeholder {
     color: #4b5563;
   }
 
