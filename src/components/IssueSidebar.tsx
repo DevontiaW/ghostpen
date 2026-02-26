@@ -4,6 +4,7 @@ interface IssueSidebarProps {
   issues: GrammarIssue[];
   text: string;
   onApplySuggestion: (issue: GrammarIssue, suggestion: string) => void;
+  onScrollToIssue: (issue: GrammarIssue) => void;
 }
 
 function issueSeverityClass(severity: string): string {
@@ -13,7 +14,7 @@ function issueSeverityClass(severity: string): string {
   return "warning";
 }
 
-export default function IssueSidebar({ issues, text, onApplySuggestion }: IssueSidebarProps) {
+export default function IssueSidebar({ issues, text, onApplySuggestion, onScrollToIssue }: IssueSidebarProps) {
   const getIssueSnippet = (issue: GrammarIssue): string => {
     return text.substring(issue.start, issue.end);
   };
@@ -40,7 +41,11 @@ export default function IssueSidebar({ issues, text, onApplySuggestion }: IssueS
         )}
 
         {issues.map((issue, i) => (
-          <div key={i} className={`issue-card ${issueSeverityClass(issue.severity)}`}>
+          <div
+            key={i}
+            className={`issue-card ${issueSeverityClass(issue.severity)}`}
+            onClick={() => onScrollToIssue(issue)}
+          >
             <div className="issue-text">
               <mark>{getIssueSnippet(issue)}</mark>
             </div>
@@ -51,7 +56,10 @@ export default function IssueSidebar({ issues, text, onApplySuggestion }: IssueS
                   <button
                     key={j}
                     className="suggestion-chip"
-                    onClick={() => onApplySuggestion(issue, s)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onApplySuggestion(issue, s);
+                    }}
                   >
                     {s}
                   </button>

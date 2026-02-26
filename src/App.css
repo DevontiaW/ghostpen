@@ -375,6 +375,13 @@
   text-decoration: none;
 }
 
+/* Issue highlight flash (sidebar click → editor) */
+.cm-issue-highlight {
+  background-color: rgba(124, 58, 237, 0.25);
+  border-radius: 2px;
+  transition: background-color 0.3s ease;
+}
+
 /* Dark mode */
 @media (prefers-color-scheme: dark) {
   :root {
