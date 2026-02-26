@@ -1,6 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { EditorView } from "@codemirror/view";
+import { EditorSelection } from "@codemirror/state";
 import Editor from "./components/Editor";
+import { highlightEffect } from "./components/Editor";
 import IssueSidebar from "./components/IssueSidebar";
 import RewritePanel from "./components/RewritePanel";
 import type { GrammarIssue, CheckResult } from "./components/Editor";
@@ -22,6 +26,35 @@ function App() {
   const [rewriteLoading, setRewriteLoading] = useState(false);
   const [llmStatus, setLlmStatus] = useState<LlmStatus>({ available: false, provider: "none", model: "" });
   const [activeMode, setActiveMode] = useState<string | null>(null);
+  const editorRef = useRef<ReactCodeMirrorRef | null>(null);
+
+  const scrollToIssue = useCallback((issue: GrammarIssue) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+
+    // Scroll the error span into view (centered vertically)
+    view.dispatch({
+      effects: EditorView.scrollIntoView(
+        EditorSelection.range(issue.start, issue.end),
+        { y: "center" }
+      ),
+    });
+
+    // Flash the highlight decoration
+    view.dispatch({
+      effects: highlightEffect.of({ from: issue.start, to: issue.end }),
+    });
+
+    // Clear highlight after 1.5 seconds
+    setTimeout(() => {
+      // Guard against unmounted editor
+      if (editorRef.current?.view) {
+        editorRef.current.view.dispatch({
+          effects: highlightEffect.of(null),
+        });
+      }
+    }, 1500);
+  }, []);
 
   // Check LLM status on mount + poll every 30s
   useEffect(() => {
@@ -149,6 +182,7 @@ function App() {
             onChange={setText}
             onIssuesFound={handleIssuesFound}
             onSelectionChange={handleSelectionChange}
+            editorRef={editorRef}
           />
         </div>
 
@@ -157,6 +191,7 @@ function App() {
             issues={issues}
             text={text}
             onApplySuggestion={applySuggestion}
+            onScrollToIssue={scrollToIssue}
           />
 
           <RewritePanel

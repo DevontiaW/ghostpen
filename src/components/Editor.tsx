@@ -1,6 +1,7 @@
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useEffect } from "react";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { EditorView } from "@codemirror/view";
+import { EditorView, Decoration, type DecorationSet } from "@codemirror/view";
+import { StateEffect, StateField } from "@codemirror/state";
 import { linter, type Diagnostic, lintGutter } from "@codemirror/lint";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -26,7 +27,29 @@ interface EditorProps {
   onChange: (value: string) => void;
   onIssuesFound: (issues: GrammarIssue[], stats: CheckResult["stats"]) => void;
   onSelectionChange: (text: string) => void;
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>;
 }
+
+// --- Highlight effect system for sidebar-to-editor sync ---
+const highlightEffect = StateEffect.define<{ from: number; to: number } | null>();
+
+const highlightMark = Decoration.mark({ class: "cm-issue-highlight" });
+
+const highlightField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(decorations, tr) {
+    for (const e of tr.effects) {
+      if (e.is(highlightEffect)) {
+        if (e.value === null) return Decoration.none;
+        return Decoration.set([
+          highlightMark.range(e.value.from, e.value.to),
+        ]);
+      }
+    }
+    return decorations;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 function mapSeverity(severity: string): "error" | "warning" | "info" {
   const s = severity.toLowerCase();
@@ -243,8 +266,7 @@ const ghostpenDarkTheme = EditorView.theme({
   },
 }, { dark: true });
 
-export default function Editor({ value, onChange, onIssuesFound, onSelectionChange }: EditorProps) {
-  const editorRef = useRef<ReactCodeMirrorRef>(null);
+export default function Editor({ value, onChange, onIssuesFound, onSelectionChange, editorRef }: EditorProps) {
   const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
   // Keep the issues callback in sync
@@ -274,6 +296,7 @@ export default function Editor({ value, onChange, onIssuesFound, onSelectionChan
     grammarLinter,
     lintGutter(),
     selectionListener,
+    highlightField,
     isDark ? ghostpenDarkTheme : ghostpenTheme,
     EditorView.lineWrapping,
   ];
@@ -307,4 +330,5 @@ No cloud. No surveillance. No keystrokes logged. Just better writing."
   );
 }
 
+export { highlightEffect };
 export type { GrammarIssue, CheckResult };
