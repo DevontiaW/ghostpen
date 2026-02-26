@@ -3,7 +3,9 @@ use harper_core::linting::{LintGroup, Linter};
 use harper_core::spell::FstDictionary;
 use harper_core::{Document, Dialect};
 use std::sync::Arc;
+use std::io::Write;
 
+mod audit;
 mod llm;
 
 #[derive(Serialize, Clone)]
@@ -50,6 +52,8 @@ pub struct LlmStatus {
 /// Check text for grammar issues using Harper (instant, local, no network)
 #[tauri::command]
 fn check_grammar(text: &str) -> CheckResult {
+    let start_time = std::time::Instant::now();
+
     let dict = FstDictionary::curated();
     let document = Document::new_plain_english(text, &dict);
     let mut linter = LintGroup::new_curated(Arc::clone(&dict), Dialect::American);
@@ -93,11 +97,20 @@ fn check_grammar(text: &str) -> CheckResult {
         .count()
         .max(1);
 
+    let duration_ms = start_time.elapsed().as_millis();
+    let issue_count = issues.len();
+
+    audit::log_event("grammar_check", serde_json::json!({
+        "word_count": word_count,
+        "issue_count": issue_count,
+        "duration_ms": duration_ms,
+    }));
+
     CheckResult {
         stats: TextStats {
             word_count,
             sentence_count,
-            issue_count: issues.len(),
+            issue_count,
         },
         issues,
     }
@@ -106,21 +119,105 @@ fn check_grammar(text: &str) -> CheckResult {
 /// Rewrite text using local LLM (Ollama or LM Studio)
 #[tauri::command]
 async fn rewrite_text(request: RewriteRequest) -> Result<RewriteResult, String> {
-    llm::rewrite(&request.text, &request.mode)
+    let text_length = request.text.len();
+    let mode = request.mode.clone();
+
+    let result = llm::rewrite(&request.text, &request.mode)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+
+    let (success, provider) = match &result {
+        Ok(_) => (true, "detected".to_string()),
+        Err(e) => (false, e.clone()),
+    };
+
+    audit::log_event("rewrite", serde_json::json!({
+        "mode": mode,
+        "text_length": text_length,
+        "success": success,
+        "provider": provider,
+    }));
+
+    result
 }
 
 /// Check if a local LLM server is running
 #[tauri::command]
 async fn check_llm_status() -> Result<LlmStatus, String> {
-    llm::check_status().await.map_err(|e| e.to_string())
+    let result = llm::check_status().await.map_err(|e| e.to_string());
+
+    if let Ok(ref status) = result {
+        audit::log_event("llm_status_check", serde_json::json!({
+            "available": status.available,
+            "provider": status.provider,
+        }));
+    }
+
+    result
 }
 
 /// Launch LM Studio in the background
 #[tauri::command]
 fn launch_llm() -> Result<String, String> {
-    llm::launch_lm_studio()
+    let result = llm::launch_lm_studio();
+
+    match &result {
+        Ok(msg) => audit::log_event("llm_launch", serde_json::json!({
+            "success": true,
+            "path_or_error": msg,
+        })),
+        Err(e) => audit::log_event("llm_launch", serde_json::json!({
+            "success": false,
+            "path_or_error": e,
+        })),
+    }
+
+    result
+}
+
+#[derive(Deserialize)]
+pub struct FeedbackRequest {
+    pub rating: String,
+    pub original_text: String,
+    pub rewritten_text: String,
+    pub mode: String,
+}
+
+/// Save user feedback on a rewrite to ~/.ghostpen/feedback.jsonl
+#[tauri::command]
+fn save_feedback(feedback: FeedbackRequest) -> Result<String, String> {
+    let ghostpen_dir = dirs::home_dir()
+        .ok_or_else(|| "Could not determine home directory".to_string())?
+        .join(".ghostpen");
+
+    std::fs::create_dir_all(&ghostpen_dir)
+        .map_err(|e| format!("Failed to create .ghostpen directory: {}", e))?;
+
+    let feedback_path = ghostpen_dir.join("feedback.jsonl");
+
+    let entry = serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "rating": feedback.rating,
+        "original_text": feedback.original_text,
+        "rewritten_text": feedback.rewritten_text,
+        "mode": feedback.mode,
+    });
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&feedback_path)
+        .map_err(|e| format!("Failed to open feedback file: {}", e))?;
+
+    writeln!(file, "{}", entry.to_string())
+        .map_err(|e| format!("Failed to write feedback: {}", e))?;
+
+    audit::log_event("feedback", serde_json::json!({
+        "rating": feedback.rating,
+        "mode": feedback.mode,
+    }));
+
+    Ok("ok".to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -132,6 +229,7 @@ pub fn run() {
             rewrite_text,
             check_llm_status,
             launch_llm,
+            save_feedback,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

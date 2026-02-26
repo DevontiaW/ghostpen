@@ -9,6 +9,7 @@ import IssueSidebar from "./components/IssueSidebar";
 import RewritePanel from "./components/RewritePanel";
 import type { GrammarIssue, CheckResult } from "./components/Editor";
 import type { RewriteResult } from "./components/RewritePanel";
+import { logEvent } from "./logger";
 import "./App.css";
 
 interface LlmStatus {
@@ -28,8 +29,10 @@ function App() {
   const [llmStatus, setLlmStatus] = useState<LlmStatus>({ available: false, provider: "none", model: "" });
   const [activeMode, setActiveMode] = useState<string | null>(null);
   const [llmLaunching, setLlmLaunching] = useState(false);
+  const [lastUsedMode, setLastUsedMode] = useState<string>("clarity");
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const textChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scrollToIssue = useCallback((issue: GrammarIssue) => {
     const view = editorRef.current?.view;
@@ -77,6 +80,9 @@ function App() {
   const handleIssuesFound = useCallback((newIssues: GrammarIssue[], newStats: CheckResult["stats"]) => {
     setIssues(newIssues);
     setStats(newStats);
+    if (newIssues.length > 0) {
+      logEvent("issues_found", { count: newIssues.length });
+    }
   }, []);
 
   const handleSelectionChange = useCallback((selected: string, from: number, to: number) => {
@@ -90,8 +96,10 @@ function App() {
     if (!targetText.trim()) return;
 
     setActiveMode(mode);
+    setLastUsedMode(mode);
     setRewriteLoading(true);
     setRewriteResult(null);
+    logEvent("rewrite_requested", { mode, text_length: targetText.length });
 
     try {
       const result = await invoke<RewriteResult>("rewrite_text", {
@@ -112,6 +120,7 @@ function App() {
   const handleQuickFix = useCallback((pos: number) => {
     const issue = issues.find(i => pos >= i.start && pos <= i.end);
     if (!issue || issue.suggestions.length === 0) return;
+    logEvent("quick_fix", { position: pos });
     // Inline the fix application using current text to avoid stale closure
     const before = text.substring(0, issue.start);
     const after = text.substring(issue.end);
@@ -119,6 +128,7 @@ function App() {
   }, [issues, text]);
 
   const applySuggestion = (issue: GrammarIssue, suggestion: string) => {
+    logEvent("suggestion_applied", { issue_message: issue.message });
     const before = text.substring(0, issue.start);
     const after = text.substring(issue.end);
     const newText = before + suggestion + after;
@@ -140,6 +150,35 @@ function App() {
     setSelectionRange(null);
   };
 
+  const handleFeedback = async (rating: "good" | "bad", rewriteText: string, mode: string) => {
+    logEvent("rewrite_feedback", { rating, mode });
+    try {
+      await invoke("save_feedback", {
+        feedback: {
+          rating,
+          original_text: selectedText || text,
+          rewritten_text: rewriteText,
+          mode,
+        },
+      });
+    } catch (err) {
+      console.error("Failed to save feedback:", err);
+    }
+  };
+
+  const handleTextChange = (newText: string) => {
+    setText(newText);
+    // Debounced text change logging
+    if (textChangeTimerRef.current) {
+      clearTimeout(textChangeTimerRef.current);
+    }
+    textChangeTimerRef.current = setTimeout(() => {
+      const word_count = newText.split(/\s+/).filter(Boolean).length;
+      logEvent("text_change", { word_count });
+      textChangeTimerRef.current = null;
+    }, 2000);
+  };
+
   return (
     <div className="app">
       <div className="header">
@@ -154,6 +193,7 @@ function App() {
               className="launch-llm-btn"
               onClick={async () => {
                 setLlmLaunching(true);
+                logEvent("llm_launch_requested");
                 try {
                   await invoke<string>("launch_llm");
                 } catch (e) {
@@ -237,7 +277,7 @@ function App() {
 
           <Editor
             value={text}
-            onChange={setText}
+            onChange={handleTextChange}
             onIssuesFound={handleIssuesFound}
             onSelectionChange={handleSelectionChange}
             editorRef={editorRef}
@@ -258,6 +298,8 @@ function App() {
             rewriteLoading={rewriteLoading}
             onApply={applyRewrite}
             onDismiss={() => setRewriteResult(null)}
+            onFeedback={handleFeedback}
+            mode={lastUsedMode}
           />
         </div>
       </div>
