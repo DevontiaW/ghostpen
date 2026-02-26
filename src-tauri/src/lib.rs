@@ -65,8 +65,12 @@ fn check_grammar(text: &str) -> CheckResult {
             let start = lint.span.start;
             let end = lint.span.end;
 
-            // Serialize suggestions as their debug representation for now
-            // TODO: extract proper replacement text once we understand the full API
+            // Pre-expand suggestions so the frontend can treat all as simple replacements
+            let original_span = if end <= text.len() {
+                &text[start..end]
+            } else {
+                ""
+            };
             let suggestions: Vec<String> = lint
                 .suggestions
                 .iter()
@@ -75,9 +79,11 @@ fn check_grammar(text: &str) -> CheckResult {
                         Some(chars.iter().collect::<String>())
                     }
                     harper_core::linting::Suggestion::InsertAfter(chars) => {
-                        Some(chars.iter().collect::<String>())
+                        // InsertAfter means keep original + append these chars
+                        let insert: String = chars.iter().collect();
+                        Some(format!("{}{}", original_span, insert))
                     }
-                    harper_core::linting::Suggestion::Remove => None,
+                    harper_core::linting::Suggestion::Remove => Some(String::new()),
                 })
                 .collect();
 

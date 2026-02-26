@@ -94,6 +94,13 @@ function App() {
   const handleRewrite = async (mode: string) => {
     const targetText = selectedText || text;
     if (!targetText.trim()) return;
+    if (targetText.length > 5000) {
+      setRewriteResult({
+        rewritten: "",
+        explanation: "Text too long for rewrite (max 5,000 characters). Select a smaller portion of text and try again.",
+      });
+      return;
+    }
 
     setActiveMode(mode);
     setLastUsedMode(mode);
