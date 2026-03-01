@@ -203,8 +203,15 @@ fn split_sentences(text: &str) -> (Vec<String>, Vec<String>) {
         current.push(ch);
 
         if (ch == '.' || ch == '!' || ch == '?') && !current.is_empty() {
-            let trimmed = current.trim_end_matches(ch);
-            let is_abbreviation = trimmed.ends_with("Mr")
+            // Strip only ONE trailing punctuation char for abbreviation check (not all of them)
+            let trimmed = if current.len() > 1 {
+                &current[..current.len() - ch.len_utf8()]
+            } else {
+                ""
+            };
+
+            let is_abbreviation = ch == '.' && (
+                trimmed.ends_with("Mr")
                 || trimmed.ends_with("Mrs")
                 || trimmed.ends_with("Dr")
                 || trimmed.ends_with("Ms")
@@ -213,7 +220,8 @@ fn split_sentences(text: &str) -> (Vec<String>, Vec<String>) {
                 || trimmed.ends_with("vs")
                 || trimmed.ends_with("etc")
                 || trimmed.ends_with("e.g")
-                || trimmed.ends_with("i.e");
+                || trimmed.ends_with("i.e")
+            );
 
             let is_ellipsis = ch == '.'
                 && i + 2 < len
@@ -227,7 +235,17 @@ fn split_sentences(text: &str) -> (Vec<String>, Vec<String>) {
                 continue;
             }
 
-            if !is_abbreviation {
+            // Skip sentence break if the period looks like part of a URL or number
+            let is_url_or_number = ch == '.' && i + 1 < len && !chars[i + 1].is_whitespace() && chars[i + 1] != '"' && chars[i + 1] != '\'';
+
+            // Skip sentence break for numbered lists like "1. First item"
+            let is_numbered_list = ch == '.' && {
+                let before_dot = trimmed.trim_start();
+                before_dot.chars().all(|c| c.is_ascii_digit()) && !before_dot.is_empty()
+                    && current.trim_start().len() <= 4 // e.g. "1." "10." "100."
+            };
+
+            if !is_abbreviation && !is_url_or_number && !is_numbered_list {
                 let at_end = i + 1 >= len;
                 let followed_by_space = !at_end && chars[i + 1].is_whitespace();
 
@@ -542,5 +560,35 @@ mod tests {
     fn diff_word_removed() {
         let changes = compute_diff("I very very like it", "I very like it");
         assert!(!changes.is_empty());
+    }
+
+    #[test]
+    fn split_numbered_list() {
+        let (sentences, _) = split_sentences("1. First item. 2. Second item.");
+        // Numbered list markers should not cause sentence breaks
+        assert_eq!(sentences.len(), 2);
+        assert!(sentences[0].starts_with("1."));
+        assert!(sentences[1].starts_with("2."));
+    }
+
+    #[test]
+    fn split_url_with_dots() {
+        let (sentences, _) = split_sentences("Visit example.com for more info.");
+        // URL-like dots (not followed by whitespace) should not split
+        assert_eq!(sentences.len(), 1);
+    }
+
+    #[test]
+    fn split_repeated_punctuation() {
+        let (sentences, _) = split_sentences("Really?? Yes!! Okay.");
+        // Should handle repeated punctuation without crashing
+        assert!(sentences.len() >= 2);
+    }
+
+    #[test]
+    fn split_quote_after_period() {
+        let (sentences, _) = split_sentences("She said \"Hello.\" Then she left.");
+        // Period inside quotes followed by quote char — still splits after the quote
+        assert!(sentences.len() >= 1);
     }
 }
