@@ -2,12 +2,19 @@ use ort::session::Session;
 use ort::value::Tensor;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use tokenizers::Tokenizer;
+
+/// Maximum text length (chars) accepted by AI Check. Prevents LCS memory blowup.
+const MAX_TEXT_CHARS: usize = 10_000;
+/// Maximum tokens per sentence before skipping T5 correction.
+const MAX_SENTENCE_TOKENS: usize = 450;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct TextChange {
+    /// Start position in the original text (char offset, not byte offset)
     pub start: usize,
+    /// End position in the original text (char offset, not byte offset)
     pub end: usize,
     pub original: String,
     pub replacement: String,
@@ -26,7 +33,8 @@ struct GrammarCorrector {
     tokenizer: Tokenizer,
 }
 
-static CORRECTOR: OnceLock<Result<GrammarCorrector, String>> = OnceLock::new();
+/// Retryable lazy init — errors are NOT cached, so model loading can be retried.
+static CORRECTOR: Mutex<Option<GrammarCorrector>> = Mutex::new(None);
 
 fn init_corrector(models_dir: PathBuf) -> Result<GrammarCorrector, String> {
     ort::init().commit();
@@ -34,6 +42,13 @@ fn init_corrector(models_dir: PathBuf) -> Result<GrammarCorrector, String> {
     let encoder_path = models_dir.join("encoder_model_quantized.onnx");
     let decoder_path = models_dir.join("decoder_model_merged_quantized.onnx");
     let tokenizer_path = models_dir.join("tokenizer.json");
+
+    if !encoder_path.exists() {
+        return Err(format!(
+            "AI model not found. Run 'python scripts/download-model.py' to download the grammar model. Expected: {}",
+            encoder_path.display()
+        ));
+    }
 
     let encoder = Session::builder()
         .map_err(|e| format!("Failed to create encoder session builder: {}", e))?
@@ -55,12 +70,17 @@ fn init_corrector(models_dir: PathBuf) -> Result<GrammarCorrector, String> {
     })
 }
 
-fn get_corrector(models_dir: PathBuf) -> Result<&'static GrammarCorrector, String> {
-    let result = CORRECTOR.get_or_init(|| init_corrector(models_dir));
-    match result {
-        Ok(corrector) => Ok(corrector),
-        Err(e) => Err(e.clone()),
+/// Get or initialize the corrector. Errors are NOT cached — retries on next call.
+fn with_corrector<F, R>(models_dir: PathBuf, f: F) -> Result<R, String>
+where
+    F: FnOnce(&GrammarCorrector) -> Result<R, String>,
+{
+    let mut guard = CORRECTOR.lock().map_err(|e| format!("Corrector lock poisoned: {}", e))?;
+    if guard.is_none() {
+        let corrector = init_corrector(models_dir)?;
+        *guard = Some(corrector);
     }
+    f(guard.as_ref().unwrap())
 }
 
 fn correct_sentence(corrector: &GrammarCorrector, sentence: &str) -> Result<String, String> {
@@ -73,6 +93,11 @@ fn correct_sentence(corrector: &GrammarCorrector, sentence: &str) -> Result<Stri
 
     let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
     let seq_len = input_ids.len();
+
+    // Skip T5 for sentences that exceed encoder token limit (return unchanged)
+    if seq_len > MAX_SENTENCE_TOKENS {
+        return Ok(sentence.to_string());
+    }
 
     let input_tensor = Tensor::from_array(([1usize, seq_len], input_ids))
         .map_err(|e| format!("Failed to create input tensor: {}", e))?;
@@ -115,12 +140,18 @@ fn correct_sentence(corrector: &GrammarCorrector, sentence: &str) -> Result<Stri
             .try_extract_tensor::<f32>()
             .map_err(|e| format!("Failed to extract logits: {}", e))?;
 
-        // shape is [batch, seq_len, vocab_size]
+        // Validate shape is [batch, seq_len, vocab_size]
+        if shape.len() < 3 {
+            return Err(format!("Unexpected logits shape: expected 3 dims, got {}", shape.len()));
+        }
         let vocab_size = shape[2] as usize;
         let last_pos = shape[1] as usize - 1;
 
-        // Argmax over last position's logits
+        // Bounds check before slicing
         let offset = last_pos * vocab_size;
+        if offset + vocab_size > logits_data.len() {
+            return Err(format!("Logits data too small: need {} elements, got {}", offset + vocab_size, logits_data.len()));
+        }
         let last_logits = &logits_data[offset..offset + vocab_size];
 
         let mut max_id: i64 = 0;
@@ -156,8 +187,12 @@ fn correct_sentence(corrector: &GrammarCorrector, sentence: &str) -> Result<Stri
     Ok(decoded)
 }
 
-fn split_sentences(text: &str) -> Vec<String> {
+/// Split text into sentences. Returns (sentences, separators) where separators[i]
+/// is the whitespace between sentences[i] and sentences[i+1]. This preserves
+/// paragraph breaks, newlines, and other inter-sentence whitespace.
+fn split_sentences(text: &str) -> (Vec<String>, Vec<String>) {
     let mut sentences = Vec::new();
+    let mut separators = Vec::new();
     let mut current = String::new();
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
@@ -199,8 +234,16 @@ fn split_sentences(text: &str) -> Vec<String> {
                 if at_end || followed_by_space {
                     sentences.push(current.clone());
                     current.clear();
+                    // Capture the inter-sentence whitespace (may include newlines, tabs, etc.)
                     if followed_by_space {
+                        let mut sep = String::new();
                         i += 1;
+                        while i < len && chars[i].is_whitespace() {
+                            sep.push(chars[i]);
+                            i += 1;
+                        }
+                        separators.push(sep);
+                        continue; // i already advanced past whitespace
                     }
                 }
             }
@@ -213,7 +256,19 @@ fn split_sentences(text: &str) -> Vec<String> {
         sentences.push(current);
     }
 
-    sentences
+    (sentences, separators)
+}
+
+/// Rejoin corrected sentences using the original inter-sentence whitespace.
+fn join_with_separators(sentences: &[String], separators: &[String]) -> String {
+    let mut result = String::new();
+    for (i, sentence) in sentences.iter().enumerate() {
+        result.push_str(sentence);
+        if i < separators.len() {
+            result.push_str(&separators[i]);
+        }
+    }
+    result
 }
 
 fn compute_diff(original: &str, corrected: &str) -> Vec<TextChange> {
@@ -260,16 +315,23 @@ fn compute_diff(original: &str, corrected: &str) -> Vec<TextChange> {
 
     ops.reverse();
 
-    // Build word byte-offset map for original text
-    let mut word_byte_starts: Vec<usize> = Vec::with_capacity(m);
-    let mut word_byte_ends: Vec<usize> = Vec::with_capacity(m);
-    let mut search_from = 0;
+    // Build word CHAR-offset map for original text (CodeMirror uses char offsets, not byte offsets)
+    let mut word_char_starts: Vec<usize> = Vec::with_capacity(m);
+    let mut word_char_ends: Vec<usize> = Vec::with_capacity(m);
+    let mut search_from_byte = 0;
+    let mut char_offset_at_search = 0;
     for &word in &orig_words {
-        if let Some(pos) = original[search_from..].find(word) {
-            let abs_start = search_from + pos;
-            word_byte_starts.push(abs_start);
-            word_byte_ends.push(abs_start + word.len());
-            search_from = abs_start + word.len();
+        if let Some(byte_pos) = original[search_from_byte..].find(word) {
+            // Count chars in the skipped portion (whitespace between words)
+            let skipped = &original[search_from_byte..search_from_byte + byte_pos];
+            let skipped_chars = skipped.chars().count();
+            let word_chars = word.chars().count();
+            let abs_char_start = char_offset_at_search + skipped_chars;
+            word_char_starts.push(abs_char_start);
+            word_char_ends.push(abs_char_start + word_chars);
+            let abs_byte_start = search_from_byte + byte_pos;
+            search_from_byte = abs_byte_start + word.len();
+            char_offset_at_search = abs_char_start + word_chars;
         }
     }
 
@@ -291,12 +353,12 @@ fn compute_diff(original: &str, corrected: &str) -> Vec<TextChange> {
             match ops[idx].0 {
                 '-' => {
                     let oi = ops[idx].1;
-                    if oi < word_byte_starts.len() {
-                        if word_byte_starts[oi] < orig_start {
-                            orig_start = word_byte_starts[oi];
+                    if oi < word_char_starts.len() {
+                        if word_char_starts[oi] < orig_start {
+                            orig_start = word_char_starts[oi];
                         }
-                        if word_byte_ends[oi] > orig_end {
-                            orig_end = word_byte_ends[oi];
+                        if word_char_ends[oi] > orig_end {
+                            orig_end = word_char_ends[oi];
                         }
                     }
                 }
@@ -305,11 +367,11 @@ fn compute_diff(original: &str, corrected: &str) -> Vec<TextChange> {
                     replacement_words.push(corr_words[ci]);
                     if orig_start == usize::MAX {
                         let anchor = ops[idx].1;
-                        if anchor < word_byte_starts.len() {
-                            orig_start = word_byte_starts[anchor];
-                            orig_end = word_byte_starts[anchor];
-                        } else if !word_byte_ends.is_empty() {
-                            orig_start = *word_byte_ends.last().unwrap();
+                        if anchor < word_char_starts.len() {
+                            orig_start = word_char_starts[anchor];
+                            orig_end = word_char_starts[anchor];
+                        } else if !word_char_ends.is_empty() {
+                            orig_start = *word_char_ends.last().unwrap();
                             orig_end = orig_start;
                         }
                     }
@@ -320,8 +382,9 @@ fn compute_diff(original: &str, corrected: &str) -> Vec<TextChange> {
         }
 
         if orig_start != usize::MAX {
+            // Extract original text using char offsets (not byte slicing)
             let original_text = if orig_end > orig_start {
-                original[orig_start..orig_end].to_string()
+                original.chars().skip(orig_start).take(orig_end - orig_start).collect::<String>()
             } else {
                 String::new()
             };
@@ -343,28 +406,36 @@ fn compute_diff(original: &str, corrected: &str) -> Vec<TextChange> {
 }
 
 pub fn correct_text(text: &str, models_dir: PathBuf) -> Result<AiCorrectionResult, String> {
-    let corrector = get_corrector(models_dir)?;
-
-    let sentences = split_sentences(text);
-    let mut corrected_sentences = Vec::with_capacity(sentences.len());
-
-    for sentence in &sentences {
-        let trimmed = sentence.trim();
-        if trimmed.is_empty() {
-            corrected_sentences.push(sentence.clone());
-            continue;
-        }
-        let corrected = correct_sentence(corrector, trimmed)?;
-        corrected_sentences.push(corrected);
+    // Guard against huge inputs that would blow up LCS diff memory
+    if text.chars().count() > MAX_TEXT_CHARS {
+        return Err(format!(
+            "Text too long for AI Check ({} chars, max {}). Select a smaller portion.",
+            text.chars().count(), MAX_TEXT_CHARS
+        ));
     }
 
-    let corrected = corrected_sentences.join(" ");
-    let changes = compute_diff(text, &corrected);
+    with_corrector(models_dir, |corrector| {
+        let (sentences, separators) = split_sentences(text);
+        let mut corrected_sentences = Vec::with_capacity(sentences.len());
 
-    Ok(AiCorrectionResult {
-        original: text.to_string(),
-        corrected,
-        changes,
+        for sentence in &sentences {
+            let trimmed = sentence.trim();
+            if trimmed.is_empty() {
+                corrected_sentences.push(sentence.clone());
+                continue;
+            }
+            let corrected = correct_sentence(corrector, trimmed)?;
+            corrected_sentences.push(corrected);
+        }
+
+        let corrected = join_with_separators(&corrected_sentences, &separators);
+        let changes = compute_diff(text, &corrected);
+
+        Ok(AiCorrectionResult {
+            original: text.to_string(),
+            corrected,
+            changes,
+        })
     })
 }
 
@@ -374,42 +445,70 @@ mod tests {
 
     #[test]
     fn split_single_sentence() {
-        let result = split_sentences("Hello world.");
-        assert_eq!(result, vec!["Hello world."]);
+        let (sentences, _) = split_sentences("Hello world.");
+        assert_eq!(sentences, vec!["Hello world."]);
     }
 
     #[test]
     fn split_multiple_sentences() {
-        let result = split_sentences("First sentence. Second sentence! Third?");
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], "First sentence.");
-        assert_eq!(result[1], "Second sentence!");
-        assert_eq!(result[2], "Third?");
+        let (sentences, separators) = split_sentences("First sentence. Second sentence! Third?");
+        assert_eq!(sentences.len(), 3);
+        assert_eq!(sentences[0], "First sentence.");
+        assert_eq!(sentences[1], "Second sentence!");
+        assert_eq!(sentences[2], "Third?");
+        assert_eq!(separators.len(), 2);
+        assert_eq!(separators[0], " ");
+        assert_eq!(separators[1], " ");
     }
 
     #[test]
     fn split_preserves_abbreviations() {
-        let result = split_sentences("Dr. Smith went to Mr. Jones.");
-        assert_eq!(result.len(), 1);
+        let (sentences, _) = split_sentences("Dr. Smith went to Mr. Jones.");
+        assert_eq!(sentences.len(), 1);
     }
 
     #[test]
     fn split_handles_ellipsis() {
-        let result = split_sentences("Wait... really? Yes.");
-        assert_eq!(result.len(), 2);
-        assert!(result[0].contains("..."));
+        let (sentences, _) = split_sentences("Wait... really? Yes.");
+        assert_eq!(sentences.len(), 2);
+        assert!(sentences[0].contains("..."));
     }
 
     #[test]
     fn split_empty_input() {
-        let result = split_sentences("");
-        assert!(result.is_empty());
+        let (sentences, _) = split_sentences("");
+        assert!(sentences.is_empty());
     }
 
     #[test]
     fn split_no_punctuation() {
-        let result = split_sentences("No punctuation here");
-        assert_eq!(result, vec!["No punctuation here"]);
+        let (sentences, _) = split_sentences("No punctuation here");
+        assert_eq!(sentences, vec!["No punctuation here"]);
+    }
+
+    #[test]
+    fn split_preserves_newlines() {
+        let (sentences, separators) = split_sentences("First paragraph.\n\nSecond paragraph.");
+        assert_eq!(sentences.len(), 2);
+        assert_eq!(separators[0], "\n\n");
+    }
+
+    #[test]
+    fn join_preserves_whitespace() {
+        let sentences = vec!["First.".to_string(), "Second.".to_string()];
+        let separators = vec!["\n\n".to_string()];
+        let result = join_with_separators(&sentences, &separators);
+        assert_eq!(result, "First.\n\nSecond.");
+    }
+
+    #[test]
+    fn diff_char_offsets_ascii() {
+        let changes = compute_diff("the cat sat", "the dog sat");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].start, 4); // char offset of "cat"
+        assert_eq!(changes[0].end, 7);
+        assert_eq!(changes[0].original, "cat");
+        assert_eq!(changes[0].replacement, "dog");
     }
 
     #[test]
