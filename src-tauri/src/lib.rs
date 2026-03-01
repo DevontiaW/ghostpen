@@ -65,12 +65,15 @@ fn check_grammar(text: &str) -> CheckResult {
             let start = lint.span.start;
             let end = lint.span.end;
 
+            // Harper returns byte offsets, but JS/CM6 expects character indices.
+            // For multi-byte chars (emoji, accented letters, smart quotes), these differ.
+            let start_char = text[..start.min(text.len())].chars().count();
+            let end_char = text[..end.min(text.len())].chars().count();
+
             // Pre-expand suggestions so the frontend can treat all as simple replacements
-            let original_span = if end <= text.len() {
-                &text[start..end]
-            } else {
-                ""
-            };
+            // Note: Rust string slicing uses byte offsets, so keep start/end for slicing.
+            // Use .get() to avoid panicking if offsets land mid-character.
+            let original_span = text.get(start..end).unwrap_or("");
             let suggestions: Vec<String> = lint
                 .suggestions
                 .iter()
@@ -88,8 +91,8 @@ fn check_grammar(text: &str) -> CheckResult {
                 .collect();
 
             GrammarIssue {
-                start,
-                end,
+                start: start_char,
+                end: end_char,
                 message: lint.message.clone(),
                 suggestions,
                 severity: format!("{:?}", lint.lint_kind),
@@ -123,12 +126,13 @@ fn check_grammar(text: &str) -> CheckResult {
 }
 
 /// Rewrite text using local LLM (Ollama or LM Studio)
+/// When called via rewrite_text_stream, emits "rewrite-stream" events with progressive text
 #[tauri::command]
 async fn rewrite_text(request: RewriteRequest) -> Result<RewriteResult, String> {
     let text_length = request.text.len();
     let mode = request.mode.clone();
 
-    let result = llm::rewrite(&request.text, &request.mode)
+    let result = llm::rewrite(&request.text, &request.mode, None)
         .await
         .map_err(|e| e.to_string());
 
@@ -145,6 +149,37 @@ async fn rewrite_text(request: RewriteRequest) -> Result<RewriteResult, String> 
     }));
 
     result
+}
+
+/// Streaming rewrite — emits "rewrite-stream" events as tokens arrive
+#[tauri::command]
+async fn rewrite_text_stream(app: tauri::AppHandle, request: RewriteRequest) -> Result<RewriteResult, String> {
+    let text_length = request.text.len();
+    let mode = request.mode.clone();
+
+    let result = llm::rewrite(&request.text, &request.mode, Some(&app))
+        .await
+        .map_err(|e| e.to_string());
+
+    let (success, provider) = match &result {
+        Ok(_) => (true, "detected".to_string()),
+        Err(e) => (false, e.clone()),
+    };
+
+    audit::log_event("rewrite_stream", serde_json::json!({
+        "mode": mode,
+        "text_length": text_length,
+        "success": success,
+        "provider": provider,
+    }));
+
+    result
+}
+
+/// Cancel an in-flight rewrite request
+#[tauri::command]
+fn cancel_rewrite() {
+    llm::request_cancel();
 }
 
 /// Check if a local LLM server is running
@@ -233,6 +268,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_grammar,
             rewrite_text,
+            rewrite_text_stream,
+            cancel_rewrite,
             check_llm_status,
             launch_llm,
             save_feedback,

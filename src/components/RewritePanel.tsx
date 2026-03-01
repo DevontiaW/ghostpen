@@ -8,13 +8,15 @@ interface RewriteResult {
 interface RewritePanelProps {
   rewriteResult: RewriteResult | null;
   rewriteLoading: boolean;
+  streamingText?: string;
   onApply: () => void;
   onDismiss: () => void;
+  onCancel?: () => void;
   onFeedback: (rating: "good" | "bad", rewriteText: string, mode: string) => void;
   mode: string;
 }
 
-export default function RewritePanel({ rewriteResult, rewriteLoading, onApply, onDismiss, onFeedback, mode }: RewritePanelProps) {
+export default function RewritePanel({ rewriteResult, rewriteLoading, streamingText, onApply, onDismiss, onCancel, onFeedback, mode }: RewritePanelProps) {
   const [feedbackGiven, setFeedbackGiven] = useState(false);
   const [showThanks, setShowThanks] = useState(false);
 
@@ -39,13 +41,26 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, onApply, o
 
   return (
     <div className="rewrite-panel">
-      <div style={{ fontSize: 14, fontWeight: 600, color: "#6d28d9" }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: "#6d28d9", display: "flex", alignItems: "center", gap: 8 }}>
         {rewriteLoading ? (
-          <span><span className="spinner" /> Thinking...</span>
+          <>
+            <span><span className="spinner" /> Thinking...</span>
+            {onCancel && (
+              <button className="toolbar-btn" style={{ fontSize: 12, padding: "2px 8px" }} onClick={onCancel}>
+                Cancel
+              </button>
+            )}
+          </>
         ) : (
           "Suggestion"
         )}
       </div>
+
+      {rewriteLoading && streamingText && (
+        <div className="rewrite-result">
+          <div className="rewrite-text" style={{ opacity: 0.8 }}>{streamingText}</div>
+        </div>
+      )}
 
       {rewriteResult && (
         <div className="rewrite-result">

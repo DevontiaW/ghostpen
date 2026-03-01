@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tauri::Emitter;
 use crate::{RewriteResult, LlmStatus};
+
+/// Generation counter for cancel safety — each rewrite gets a unique ID.
+/// cancel stores the ID to cancel; the streaming loop checks its own ID.
+static REWRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
+static CANCEL_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn request_cancel() {
+    // Cancel whatever generation is currently running
+    CANCEL_GENERATION.store(REWRITE_GENERATION.load(Ordering::SeqCst), Ordering::SeqCst);
+}
 
 // Both Ollama and LM Studio serve OpenAI-compatible API on these ports
 // Use 127.0.0.1 instead of localhost — Windows can resolve localhost to IPv6 ::1
@@ -45,7 +57,18 @@ enum Provider {
     LmStudio,
 }
 
-async fn detect_provider() -> Result<(Provider, String), Box<dyn std::error::Error + Send + Sync>> {
+/// Response from /v1/models endpoint
+#[derive(Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+}
+
+async fn detect_provider() -> Result<(Provider, String, String), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::new();
     let timeout = std::time::Duration::from_secs(2);
 
@@ -57,7 +80,13 @@ async fn detect_provider() -> Result<(Provider, String), Box<dyn std::error::Err
         .await
     {
         if resp.status().is_success() {
-            return Ok((Provider::LmStudio, LMSTUDIO_URL.to_string()));
+            // Parse the actual model name from the response
+            let model_name = if let Ok(models) = resp.json::<ModelsResponse>().await {
+                models.data.first().map(|m| m.id.clone()).unwrap_or_else(|| LMSTUDIO_MODEL.to_string())
+            } else {
+                LMSTUDIO_MODEL.to_string()
+            };
+            return Ok((Provider::LmStudio, LMSTUDIO_URL.to_string(), model_name));
         }
     }
 
@@ -69,7 +98,7 @@ async fn detect_provider() -> Result<(Provider, String), Box<dyn std::error::Err
         .await
     {
         if resp.status().is_success() {
-            return Ok((Provider::Ollama, OLLAMA_LOCAL_URL.to_string()));
+            return Ok((Provider::Ollama, OLLAMA_LOCAL_URL.to_string(), OLLAMA_MODEL.to_string()));
         }
     }
 
@@ -111,15 +140,15 @@ pub fn launch_lm_studio() -> Result<String, String> {
 
 pub async fn check_status() -> Result<LlmStatus, Box<dyn std::error::Error + Send + Sync>> {
     match detect_provider().await {
-        Ok((Provider::Ollama, _)) => Ok(LlmStatus {
+        Ok((Provider::Ollama, _, model)) => Ok(LlmStatus {
             available: true,
             provider: "Ollama".to_string(),
-            model: OLLAMA_MODEL.to_string(),
+            model,
         }),
-        Ok((Provider::LmStudio, _)) => Ok(LlmStatus {
+        Ok((Provider::LmStudio, _, model)) => Ok(LlmStatus {
             available: true,
             provider: "LM Studio".to_string(),
-            model: LMSTUDIO_MODEL.to_string(),
+            model,
         }),
         Err(_) => Ok(LlmStatus {
             available: false,
@@ -129,23 +158,35 @@ pub async fn check_status() -> Result<LlmStatus, Box<dyn std::error::Error + Sen
     }
 }
 
-pub async fn rewrite(text: &str, mode: &str) -> Result<RewriteResult, Box<dyn std::error::Error + Send + Sync>> {
-    let (provider, base_url) = detect_provider().await?;
+/// Streaming chunk from OpenAI-compatible SSE
+#[derive(Deserialize)]
+struct StreamChunk {
+    choices: Vec<StreamChoice>,
+}
 
-    let model = match provider {
-        Provider::Ollama => OLLAMA_MODEL.to_string(),
-        Provider::LmStudio => LMSTUDIO_MODEL.to_string(),
-    };
+#[derive(Deserialize)]
+struct StreamChoice {
+    delta: StreamDelta,
+}
+
+#[derive(Deserialize)]
+struct StreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+}
+
+pub async fn rewrite(text: &str, mode: &str, app_handle: Option<&tauri::AppHandle>) -> Result<RewriteResult, Box<dyn std::error::Error + Send + Sync>> {
+    // Assign a unique generation ID to this rewrite call
+    let my_generation = REWRITE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+
+    let (_provider, base_url, model) = detect_provider().await?;
 
     let system_prompt = "You are a writing assistant. You help improve text while preserving the writer's voice. Always explain WHY you made changes so the writer learns. Be concise.";
     let user_prompt = build_prompt(text, mode);
 
-    // Both Ollama and LM Studio support OpenAI-compatible /v1/chat/completions
-    let api_url = match provider {
-        Provider::Ollama => format!("{}/v1/chat/completions", base_url),
-        Provider::LmStudio => format!("{}/v1/chat/completions", base_url),
-    };
+    let api_url = format!("{}/v1/chat/completions", base_url);
 
+    let use_stream = app_handle.is_some();
     let client = reqwest::Client::new();
     let resp = client
         .post(&api_url)
@@ -161,20 +202,66 @@ pub async fn rewrite(text: &str, mode: &str) -> Result<RewriteResult, Box<dyn st
                     content: user_prompt,
                 },
             ],
-            stream: false,
+            stream: use_stream,
             temperature: 0.3,
         })
         .timeout(std::time::Duration::from_secs(180))
         .send()
-        .await?
-        .json::<ChatResponse>()
         .await?;
 
-    let full = resp
-        .choices
-        .first()
-        .map(|c| c.message.content.trim().to_string())
-        .unwrap_or_default();
+    let full = if use_stream {
+        // Stream tokens and emit events to the frontend
+        use futures_util::StreamExt;
+        let app = app_handle.unwrap();
+        let mut accumulated = String::new();
+        let mut stream = resp.bytes_stream();
+
+        // SSE buffer — responses come as "data: {...}\n\n" lines
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            if CANCEL_GENERATION.load(Ordering::SeqCst) == my_generation {
+                return Err("Rewrite cancelled by user".into());
+            }
+
+            let chunk = chunk_result?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            if buffer.len() > 1_048_576 {
+                return Err("SSE buffer overflow — malformed LLM response".into());
+            }
+
+            // Process complete SSE lines
+            while let Some(line_end) = buffer.find('\n') {
+                let line = buffer[..line_end].trim().to_string();
+                buffer = buffer[line_end + 1..].to_string();
+
+                if line.starts_with("data: ") {
+                    let json_str = &line[6..];
+                    if json_str.trim() == "[DONE]" {
+                        continue;
+                    }
+                    if let Ok(chunk) = serde_json::from_str::<StreamChunk>(json_str) {
+                        if let Some(choice) = chunk.choices.first() {
+                            if let Some(content) = &choice.delta.content {
+                                accumulated.push_str(content);
+                                let _ = app.emit("rewrite-stream", &accumulated);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        accumulated.trim().to_string()
+    } else {
+        // Non-streaming fallback
+        let chat_resp = resp.json::<ChatResponse>().await?;
+        chat_resp
+            .choices
+            .first()
+            .map(|c| c.message.content.trim().to_string())
+            .unwrap_or_default()
+    };
 
     // Parse response — try to split rewrite from explanation
     let (rewritten, explanation) = parse_response(&full);
@@ -187,7 +274,7 @@ pub async fn rewrite(text: &str, mode: &str) -> Result<RewriteResult, Box<dyn st
 
 fn parse_response(full: &str) -> (String, String) {
     // Try various delimiter patterns
-    for delimiter in &["EXPLANATION:", "**Explanation:**", "**Why:**", "---", "\n\n**Changes"] {
+    for delimiter in &["EXPLANATION:", "**Explanation:**", "**Why:**", "\nExplanation:", "\n\n**Changes"] {
         if let Some(idx) = full.find(delimiter) {
             let rewrite = full[..idx].trim();
             let explain = full[idx + delimiter.len()..].trim();

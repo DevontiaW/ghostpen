@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
@@ -91,7 +92,12 @@ function App() {
     if (!selected) setRewriteResult(null);
   }, []);
 
+  const [streamingText, setStreamingText] = useState("");
+  const isRewriting = useRef(false);
+  const rewriteSelectionRef = useRef<{ from: number; to: number } | null>(null);
+
   const handleRewrite = async (mode: string) => {
+    if (isRewriting.current) return; // Prevent concurrent rewrites (CRIT-2)
     const targetText = selectedText || text;
     if (!targetText.trim()) return;
     if (targetText.length > 5000) {
@@ -102,55 +108,79 @@ function App() {
       return;
     }
 
+    isRewriting.current = true;
+    rewriteSelectionRef.current = selectionRange; // Capture selection at rewrite start (HIGH-3)
     setActiveMode(mode);
     setLastUsedMode(mode);
     setRewriteLoading(true);
     setRewriteResult(null);
+    setStreamingText("");
     logEvent("rewrite_requested", { mode, text_length: targetText.length });
 
+    // Listen for streaming tokens
+    const unlisten = await listen<string>("rewrite-stream", (event) => {
+      setStreamingText(event.payload);
+    });
+
     try {
-      const result = await invoke<RewriteResult>("rewrite_text", {
+      const result = await invoke<RewriteResult>("rewrite_text_stream", {
         request: { text: targetText, mode },
       });
       setRewriteResult(result);
+      setStreamingText("");
     } catch (err) {
-      setRewriteResult({
-        rewritten: "",
-        explanation: `Error: ${err}. Make sure Ollama or LM Studio is running locally.`,
-      });
+      const errStr = String(err);
+      if (!errStr.includes("cancelled")) {
+        setRewriteResult({
+          rewritten: "",
+          explanation: `Error: ${err}. Make sure Ollama or LM Studio is running locally.`,
+        });
+      }
+      setStreamingText("");
     } finally {
+      unlisten();
+      isRewriting.current = false;
       setRewriteLoading(false);
       setActiveMode(null);
     }
+  };
+
+  const handleCancelRewrite = async () => {
+    try {
+      await invoke("cancel_rewrite");
+    } catch { /* ignore */ }
   };
 
   const handleQuickFix = useCallback((pos: number) => {
     const issue = issues.find(i => pos >= i.start && pos <= i.end);
     if (!issue || issue.suggestions.length === 0) return;
     logEvent("quick_fix", { position: pos });
-    // Inline the fix application using current text to avoid stale closure
-    const before = text.substring(0, issue.start);
-    const after = text.substring(issue.end);
-    setText(before + issue.suggestions[0] + after);
-  }, [issues, text]);
+    const view = editorRef.current?.view;
+    if (!view) return;
+    view.dispatch({ changes: { from: issue.start, to: issue.end, insert: issue.suggestions[0] } });
+    // Clear stale issues — positions are invalid after edit. Linter re-runs in 300ms.
+    setIssues([]);
+  }, [issues]);
 
   const applySuggestion = (issue: GrammarIssue, suggestion: string) => {
     logEvent("suggestion_applied", { issue_message: issue.message });
-    const before = text.substring(0, issue.start);
-    const after = text.substring(issue.end);
-    const newText = before + suggestion + after;
-    setText(newText);
+    const view = editorRef.current?.view;
+    if (!view) return;
+    view.dispatch({ changes: { from: issue.start, to: issue.end, insert: suggestion } });
+    // Clear stale issues — positions are invalid after edit. Linter re-runs in 300ms.
+    setIssues([]);
   };
 
   const applyRewrite = () => {
     if (!rewriteResult?.rewritten) return;
-    if (selectionRange) {
-      const newText = text.substring(0, selectionRange.from)
-        + rewriteResult.rewritten
-        + text.substring(selectionRange.to);
-      setText(newText);
+    const view = editorRef.current?.view;
+    if (!view) return;
+    // Use the selection range captured at rewrite-start, not the current selection
+    const capturedRange = rewriteSelectionRef.current;
+    if (capturedRange) {
+      view.dispatch({ changes: { from: capturedRange.from, to: capturedRange.to, insert: rewriteResult.rewritten } });
     } else {
-      setText(rewriteResult.rewritten);
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: rewriteResult.rewritten } });
     }
     setRewriteResult(null);
     setSelectedText("");
@@ -303,8 +333,10 @@ function App() {
           <RewritePanel
             rewriteResult={rewriteResult}
             rewriteLoading={rewriteLoading}
+            streamingText={streamingText}
             onApply={applyRewrite}
             onDismiss={() => setRewriteResult(null)}
+            onCancel={handleCancelRewrite}
             onFeedback={handleFeedback}
             mode={lastUsedMode}
           />
