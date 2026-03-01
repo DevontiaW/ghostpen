@@ -18,8 +18,10 @@ Ghostpen is a desktop writing tool that checks grammar instantly and offers AI-p
 
 ### AI Rewrites (Local LLM)
 - **5 rewrite modes** — Clarity, Concise, Formal, Casual, and Coach Me (explains WHY changes improve your writing)
+- **Streaming responses** — See tokens as they arrive with live markdown rendering. Cancel anytime
 - **Selection-aware** — Select specific text to rewrite just that portion, or rewrite the whole document
-- **Works with Ollama or LM Studio** — Bring your own model. Auto-detects which is running
+- **Works with Ollama or LM Studio** — Bring your own model. Auto-detects which is running and shows the loaded model name
+- **Smart model detection** — Automatically picks a chat model (skips embedding models) from LM Studio
 - **LM Studio auto-launch** — One-click button to start LM Studio if it's installed but not running
 
 ### Quality Infrastructure
@@ -30,6 +32,7 @@ Ghostpen is a desktop writing tool that checks grammar instantly and offers AI-p
 
 ### Privacy & Performance
 - **Zero network calls** — Everything runs on localhost. Verify it yourself
+- **Content Security Policy** — CSP locked down to `self` + localhost LLM ports. No inline scripts
 - **Dark mode** — Respects your system theme preference
 - **Tiny footprint** — ~25MB binary, ~50MB RAM idle (not Electron's 300MB+)
 - **Cross-platform** — Windows, macOS, Linux via Tauri
@@ -96,7 +99,7 @@ See also: [MANIFESTO.md](MANIFESTO.md) and [PRIVACY.md](PRIVACY.md)
 |  +-------------+    +----------------+   |
 |  |   Harper    |    |  LLM Client    |   |
 |  |  (Grammar)  |    | (Ollama/LMS)   |   |
-|  |  <10ms      |    |  127.0.0.1     |   |
+|  |  <10ms      |    |  SSE streaming |   |
 |  +-------------+    +----------------+   |
 |                                          |
 |  +-------------+    +----------------+   |
@@ -137,18 +140,18 @@ No telemetry. No analytics. No phone-home. Ever.
 PRs welcome. The codebase is intentionally simple — if you can read React and basic Rust, you can contribute.
 
 Priority areas:
-- Streaming LLM responses (show tokens as they arrive)
 - Model validation (detect broken/garbage output early)
 - Writing pattern tracking over time
 - Custom style rules
+- Punctuation-aware linting (missing periods, comma splices)
 - Multi-language support
 - Browser extension (privacy-first, no surveillance capabilities)
 
 ## Known Limitations
 
-- **UTF-8 vs UTF-16 offsets** — Harper uses byte offsets, JavaScript uses code units. Emoji and CJK characters may cause misaligned underlines
-- **LLM quality varies** — Small local models can produce inconsistent output. Model selection and validation is an active area of development
-- **No streaming yet** — Rewrite requests block until complete (can take 1-3 minutes on CPU with larger models)
+- **LLM quality varies** — Small local models (3B) can produce inconsistent output. 8B+ models recommended. CPU inference on 13B+ will be slow
+- **No punctuation linting** — Harper catches spelling, capitalization, and style but not missing periods or comma splices. Use Coach Me mode for punctuation feedback
+- **No undo for applied rewrites** — Ctrl+Z works for grammar fixes but applying a full-document rewrite replaces the entire document
 
 ## License
 
