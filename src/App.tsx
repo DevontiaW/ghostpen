@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
@@ -8,6 +11,7 @@ import Editor from "./components/Editor";
 import { highlightEffect } from "./components/Editor";
 import IssueSidebar from "./components/IssueSidebar";
 import RewritePanel from "./components/RewritePanel";
+import OnboardingWizard from "./components/OnboardingWizard";
 import type { GrammarIssue, CheckResult } from "./components/Editor";
 import type { RewriteResult } from "./components/RewritePanel";
 import { logEvent } from "./logger";
@@ -18,6 +22,9 @@ interface LlmStatus {
   provider: string;
   model: string;
 }
+
+const DRAFT_KEY = "ghostpen-draft";
+const ONBOARDED_KEY = "ghostpen-onboarded";
 
 function App() {
   const [text, setText] = useState("");
@@ -31,20 +38,134 @@ function App() {
   const [activeMode, setActiveMode] = useState<string | null>(null);
   const [llmLaunching, setLlmLaunching] = useState(false);
   const [lastUsedMode, setLastUsedMode] = useState<string>("clarity");
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Show toast briefly
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 2000);
+  };
+
+  // --- File operations ---
+  const handleOpen = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [
+          { name: "Text Files", extensions: ["txt", "md", "markdown"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (!selected) return;
+      const path = typeof selected === "string" ? selected : selected;
+      const content = await readTextFile(path);
+      setText(content);
+      setCurrentFilePath(path);
+      setIsDirty(false);
+      localStorage.removeItem(DRAFT_KEY);
+      logEvent("file_opened", { path });
+    } catch (err) {
+      console.error("Failed to open file:", err);
+    }
+  }, []);
+
+  const handleSaveAs = useCallback(async () => {
+    try {
+      const path = await save({
+        filters: [
+          { name: "Text Files", extensions: ["txt", "md"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (!path) return;
+      await writeTextFile(path, text);
+      setCurrentFilePath(path);
+      setIsDirty(false);
+      showToast("Saved");
+      logEvent("file_saved_as", { path });
+    } catch (err) {
+      console.error("Failed to save file:", err);
+    }
+  }, [text]);
+
+  const handleSave = useCallback(async () => {
+    if (currentFilePath) {
+      try {
+        await writeTextFile(currentFilePath, text);
+        setIsDirty(false);
+        showToast("Saved");
+        logEvent("file_saved", { path: currentFilePath });
+      } catch (err) {
+        console.error("Failed to save file:", err);
+      }
+    } else {
+      handleSaveAs();
+    }
+  }, [currentFilePath, text, handleSaveAs]);
+
+  const handleCopyAll = useCallback(async () => {
+    try {
+      await writeText(text);
+      showToast("Copied!");
+      logEvent("text_copied", { length: text.length });
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  }, [text]);
+
+  const handleExport = useCallback(async () => {
+    try {
+      const path = await save({
+        filters: [
+          { name: "Text", extensions: ["txt"] },
+          { name: "Markdown", extensions: ["md"] },
+        ],
+      });
+      if (!path) return;
+      await writeTextFile(path, text);
+      showToast("Exported");
+      logEvent("file_exported", { path });
+    } catch (err) {
+      console.error("Failed to export:", err);
+    }
+  }, [text]);
+
+  // Expose file handlers for Editor keybindings
+  const fileHandlersRef = useRef({ handleOpen, handleSave, handleSaveAs });
+  useEffect(() => {
+    fileHandlersRef.current = { handleOpen, handleSave, handleSaveAs };
+  }, [handleOpen, handleSave, handleSaveAs]);
+
+  // --- Onboarding check ---
+  useEffect(() => {
+    if (!localStorage.getItem(ONBOARDED_KEY)) {
+      setShowOnboarding(true);
+    }
+  }, []);
+
+  // --- Restore draft from localStorage on mount ---
+  useEffect(() => {
+    const savedDraft = localStorage.getItem(DRAFT_KEY);
+    if (savedDraft && !currentFilePath) {
+      setText(savedDraft);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const scrollToIssue = useCallback((issue: GrammarIssue) => {
     const view = editorRef.current?.view;
     if (!view) return;
 
-    // Cancel any pending highlight clear from a previous click
     if (highlightTimerRef.current) {
       clearTimeout(highlightTimerRef.current);
     }
 
-    // Scroll the error span into view (centered vertically)
     view.dispatch({
       effects: EditorView.scrollIntoView(
         EditorSelection.range(issue.start, issue.end),
@@ -52,14 +173,11 @@ function App() {
       ),
     });
 
-    // Flash the highlight decoration
     view.dispatch({
       effects: highlightEffect.of({ from: issue.start, to: issue.end }),
     });
 
-    // Clear highlight after 1.5 seconds
     highlightTimerRef.current = setTimeout(() => {
-      // Guard against unmounted editor
       if (editorRef.current?.view) {
         editorRef.current.view.dispatch({
           effects: highlightEffect.of(null),
@@ -97,7 +215,7 @@ function App() {
   const rewriteSelectionRef = useRef<{ from: number; to: number } | null>(null);
 
   const handleRewrite = async (mode: string) => {
-    if (isRewriting.current) return; // Prevent concurrent rewrites (CRIT-2)
+    if (isRewriting.current) return;
     const targetText = selectedText || text;
     if (!targetText.trim()) return;
     if (targetText.length > 5000) {
@@ -109,7 +227,7 @@ function App() {
     }
 
     isRewriting.current = true;
-    rewriteSelectionRef.current = selectionRange; // Capture selection at rewrite start (HIGH-3)
+    rewriteSelectionRef.current = selectionRange;
     setActiveMode(mode);
     setLastUsedMode(mode);
     setRewriteLoading(true);
@@ -117,7 +235,6 @@ function App() {
     setStreamingText("");
     logEvent("rewrite_requested", { mode, text_length: targetText.length });
 
-    // Listen for streaming tokens
     const unlisten = await listen<string>("rewrite-stream", (event) => {
       setStreamingText(event.payload);
     });
@@ -158,7 +275,6 @@ function App() {
     const view = editorRef.current?.view;
     if (!view) return;
     view.dispatch({ changes: { from: issue.start, to: issue.end, insert: issue.suggestions[0] } });
-    // Clear stale issues — positions are invalid after edit. Linter re-runs in 300ms.
     setIssues([]);
   }, [issues]);
 
@@ -167,7 +283,6 @@ function App() {
     const view = editorRef.current?.view;
     if (!view) return;
     view.dispatch({ changes: { from: issue.start, to: issue.end, insert: suggestion } });
-    // Clear stale issues — positions are invalid after edit. Linter re-runs in 300ms.
     setIssues([]);
   };
 
@@ -175,7 +290,6 @@ function App() {
     if (!rewriteResult?.rewritten) return;
     const view = editorRef.current?.view;
     if (!view) return;
-    // Use the selection range captured at rewrite-start, not the current selection
     const capturedRange = rewriteSelectionRef.current;
     if (capturedRange) {
       view.dispatch({ changes: { from: capturedRange.from, to: capturedRange.to, insert: rewriteResult.rewritten } });
@@ -205,6 +319,17 @@ function App() {
 
   const handleTextChange = (newText: string) => {
     setText(newText);
+    setIsDirty(true);
+
+    // Debounced auto-save to localStorage (1s)
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = setTimeout(() => {
+      localStorage.setItem(DRAFT_KEY, newText);
+      autoSaveTimerRef.current = null;
+    }, 1000);
+
     // Debounced text change logging
     if (textChangeTimerRef.current) {
       clearTimeout(textChangeTimerRef.current);
@@ -216,11 +341,23 @@ function App() {
     }, 2000);
   };
 
+  // Extract display filename from path
+  const displayName = currentFilePath
+    ? currentFilePath.split(/[/\\]/).pop() || "Untitled"
+    : "Untitled";
+
   return (
     <div className="app">
+      {showOnboarding && (
+        <OnboardingWizard onComplete={() => setShowOnboarding(false)} />
+      )}
+
       <div className="header">
         <div className="header-left">
           <div className="logo">Ghost<span>pen</span></div>
+          <div className="file-name">
+            {displayName}{isDirty && <span className="dirty-dot" title="Unsaved changes" />}
+          </div>
           <div className={`status-badge ${llmStatus.available ? "connected" : "disconnected"}`}>
             <div className="status-dot" />
             {llmStatus.available ? `${llmStatus.provider}` : "No LLM"}
@@ -236,9 +373,8 @@ function App() {
                 } catch (e) {
                   console.error("Failed to launch LLM:", e);
                   setLlmLaunching(false);
-                  return; // Don't poll if launch failed
+                  return;
                 }
-                // Poll for LLM to come online (up to 30s)
                 let attempts = 0;
                 const poll = setInterval(async () => {
                   attempts++;
@@ -305,6 +441,13 @@ function App() {
               {activeMode === "explain" && <span className="spinner" />}
               {" "}Coach Me
             </button>
+            <div className="toolbar-separator" />
+            <button className="toolbar-btn toolbar-btn-icon" onClick={handleCopyAll} title="Copy all text">
+              Copy
+            </button>
+            <button className="toolbar-btn toolbar-btn-icon" onClick={handleExport} title="Export to file">
+              Export
+            </button>
             {selectedText && (
               <span style={{ fontSize: 12, color: "#7c3aed", marginLeft: 8 }}>
                 {selectedText.length} chars selected
@@ -319,6 +462,7 @@ function App() {
             onSelectionChange={handleSelectionChange}
             editorRef={editorRef}
             onQuickFix={handleQuickFix}
+            fileHandlersRef={fileHandlersRef}
           />
         </div>
 
@@ -344,7 +488,7 @@ function App() {
       </div>
 
       <div className="footer">
-        <span>Ghostpen v0.2.0 -- Your writing never leaves your machine</span>
+        <span>Ghostpen v0.3.0 -- Your writing never leaves your machine</span>
         <span>
           {llmStatus.available
             ? `${llmStatus.provider} (${llmStatus.model})`
@@ -352,6 +496,10 @@ function App() {
           }
         </span>
       </div>
+
+      {toastMessage && (
+        <div className="toast">{toastMessage}</div>
+      )}
     </div>
   );
 }

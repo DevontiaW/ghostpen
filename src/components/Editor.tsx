@@ -22,6 +22,12 @@ interface CheckResult {
   };
 }
 
+interface FileHandlers {
+  handleOpen: () => void;
+  handleSave: () => void;
+  handleSaveAs: () => void;
+}
+
 interface EditorProps {
   value: string;
   onChange: (value: string) => void;
@@ -29,6 +35,7 @@ interface EditorProps {
   onSelectionChange: (text: string, from: number, to: number) => void;
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
   onQuickFix?: (pos: number) => void;
+  fileHandlersRef?: React.RefObject<FileHandlers>;
 }
 
 // --- Highlight effect system for sidebar-to-editor sync ---
@@ -67,6 +74,9 @@ let issuesCallback: ((issues: GrammarIssue[], stats: CheckResult["stats"]) => vo
 // Module-level callback for quick fix (same pattern as issuesCallback)
 let quickFixCallback: ((pos: number) => void) | null = null;
 
+// Module-level ref for file handlers
+let fileHandlersCallbackRef: React.RefObject<FileHandlers> | null = null;
+
 const quickFixKeymap = keymap.of([{
   key: "Mod-.",
   run: (view) => {
@@ -76,6 +86,30 @@ const quickFixKeymap = keymap.of([{
     return true;
   }
 }]);
+
+const fileKeymap = keymap.of([
+  {
+    key: "Mod-o",
+    run: () => {
+      fileHandlersCallbackRef?.current?.handleOpen();
+      return true;
+    },
+  },
+  {
+    key: "Mod-s",
+    run: () => {
+      fileHandlersCallbackRef?.current?.handleSave();
+      return true;
+    },
+  },
+  {
+    key: "Mod-Shift-s",
+    run: () => {
+      fileHandlersCallbackRef?.current?.handleSaveAs();
+      return true;
+    },
+  },
+]);
 
 const grammarLinter = linter(
   async (view) => {
@@ -282,7 +316,7 @@ const ghostpenDarkTheme = EditorView.theme({
   },
 }, { dark: true });
 
-export default function Editor({ value, onChange, onIssuesFound, onSelectionChange, editorRef, onQuickFix }: EditorProps) {
+export default function Editor({ value, onChange, onIssuesFound, onSelectionChange, editorRef, onQuickFix, fileHandlersRef }: EditorProps) {
   const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
   // Keep the issues callback in sync
@@ -296,6 +330,12 @@ export default function Editor({ value, onChange, onIssuesFound, onSelectionChan
     quickFixCallback = onQuickFix || null;
     return () => { quickFixCallback = null; };
   }, [onQuickFix]);
+
+  // Keep the file handlers ref in sync
+  useEffect(() => {
+    fileHandlersCallbackRef = fileHandlersRef || null;
+    return () => { fileHandlersCallbackRef = null; };
+  }, [fileHandlersRef]);
 
   const handleChange = useCallback((val: string) => {
     onChange(val);
@@ -315,6 +355,7 @@ export default function Editor({ value, onChange, onIssuesFound, onSelectionChan
   });
 
   const extensions = [
+    fileKeymap,
     quickFixKeymap,
     grammarLinter,
     lintGutter(),
