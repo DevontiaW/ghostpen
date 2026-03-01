@@ -4,6 +4,7 @@ use harper_core::spell::FstDictionary;
 use harper_core::{Document, Dialect};
 use std::io::Write;
 use std::sync::Arc;
+use regex::Regex;
 
 mod audit;
 mod llm;
@@ -49,6 +50,68 @@ pub struct LlmStatus {
     pub model: String,
 }
 
+/// Check for punctuation issues that Harper doesn't catch
+fn check_punctuation(text: &str) -> Vec<GrammarIssue> {
+    let mut issues = Vec::new();
+
+    // Double spaces
+    let double_space = Regex::new(r"  +").unwrap();
+    for m in double_space.find_iter(text) {
+        let start_char = text[..m.start()].chars().count();
+        let end_char = text[..m.end()].chars().count();
+        issues.push(GrammarIssue {
+            start: start_char,
+            end: end_char,
+            message: "Multiple spaces found. Use a single space.".to_string(),
+            suggestions: vec![" ".to_string()],
+            severity: "Style".to_string(),
+        });
+    }
+
+    // Repeated punctuation (!!, ??, ..)
+    let repeated_punct = Regex::new(r"([!?.])\1{1,}").unwrap();
+    for m in repeated_punct.find_iter(text) {
+        let matched = m.as_str();
+        // Allow "..." (ellipsis) — only flag if not exactly 3 dots
+        if matched.starts_with('.') && matched.len() == 3 {
+            continue;
+        }
+        let start_char = text[..m.start()].chars().count();
+        let end_char = text[..m.end()].chars().count();
+        let single = matched.chars().next().unwrap().to_string();
+        issues.push(GrammarIssue {
+            start: start_char,
+            end: end_char,
+            message: format!("Repeated punctuation '{}'. Use a single character.", matched),
+            suggestions: vec![single],
+            severity: "Style".to_string(),
+        });
+    }
+
+    // Sentence without ending punctuation — lines that look like sentences
+    // (start with capital, have 3+ words, don't end with .!?:;)
+    let sentence_line = Regex::new(r#"(?m)^[A-Z][^\n]{10,}[a-z0-9)\]"']$"#).unwrap();
+    for m in sentence_line.find_iter(text) {
+        let line = m.as_str();
+        let word_count = line.split_whitespace().count();
+        if word_count >= 3 {
+            // Point to the end of the line
+            let end_char = text[..m.end()].chars().count();
+            issues.push(GrammarIssue {
+                start: end_char - 1,
+                end: end_char,
+                message: "Sentence may be missing ending punctuation.".to_string(),
+                suggestions: vec![
+                    format!("{}.", &line[line.len()-1..]),
+                ],
+                severity: "Style".to_string(),
+            });
+        }
+    }
+
+    issues
+}
+
 /// Check text for grammar issues using Harper (instant, local, no network)
 #[tauri::command]
 fn check_grammar(text: &str) -> CheckResult {
@@ -59,7 +122,7 @@ fn check_grammar(text: &str) -> CheckResult {
     let mut linter = LintGroup::new_curated(Arc::clone(&dict), Dialect::American);
     let lints = linter.lint(&document);
 
-    let issues: Vec<GrammarIssue> = lints
+    let mut issues: Vec<GrammarIssue> = lints
         .iter()
         .map(|lint| {
             let start = lint.span.start;
@@ -99,6 +162,10 @@ fn check_grammar(text: &str) -> CheckResult {
             }
         })
         .collect();
+
+    // Merge punctuation issues that Harper doesn't catch
+    let mut punctuation_issues = check_punctuation(text);
+    issues.append(&mut punctuation_issues);
 
     let word_count = text.split_whitespace().count();
     let sentence_count = text.chars()
@@ -265,6 +332,9 @@ fn save_feedback(feedback: FeedbackRequest) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .invoke_handler(tauri::generate_handler![
             check_grammar,
             rewrite_text,
