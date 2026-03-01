@@ -11,6 +11,7 @@ import { isolateHistory } from "@codemirror/commands";
 import Editor from "./components/Editor";
 import { highlightEffect } from "./components/Editor";
 import IssueSidebar from "./components/IssueSidebar";
+import AiCorrections from "./components/AiCorrections";
 const RewritePanel = lazy(() => import("./components/RewritePanel"));
 import OnboardingWizard from "./components/OnboardingWizard";
 import type { GrammarIssue, CheckResult } from "./components/Editor";
@@ -23,6 +24,19 @@ interface LlmStatus {
   available: boolean;
   provider: string;
   model: string;
+}
+
+interface TextChange {
+  start: number;
+  end: number;
+  original: string;
+  replacement: string;
+}
+
+interface AiCorrectionResult {
+  original: string;
+  corrected: string;
+  changes: TextChange[];
 }
 
 const DRAFT_KEY = "ghostpen-draft";
@@ -79,6 +93,8 @@ function App() {
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [aiResult, setAiResult] = useState<AiCorrectionResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   // Show toast briefly
   const showToast = (msg: string) => {
@@ -352,6 +368,64 @@ function App() {
     } catch { /* ignore */ }
   };
 
+  const handleAiCheck = async () => {
+    if (aiLoading || !text.trim()) return;
+    setAiLoading(true);
+    setAiResult(null);
+    logEvent("ai_check_requested", { text_length: text.length });
+    try {
+      const result = await invoke<AiCorrectionResult>("correct_grammar_ai", { text });
+      setAiResult(result);
+    } catch (err) {
+      setAiResult({
+        original: text,
+        corrected: text,
+        changes: [],
+      });
+      console.error("AI check failed:", err);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleAcceptAllAi = () => {
+    if (!aiResult?.corrected) return;
+    const view = editorRef.current?.view;
+    if (!view) return;
+    const annotation = isolateHistory.of("full");
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: aiResult.corrected },
+      annotations: annotation,
+    });
+    setAiResult(null);
+    logEvent("ai_corrections_accepted_all");
+  };
+
+  const handleAcceptAiChange = (change: TextChange) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    view.dispatch({
+      changes: { from: change.start, to: change.end, insert: change.replacement },
+    });
+    if (aiResult) {
+      const lengthDiff = change.replacement.length - (change.end - change.start);
+      const updatedChanges = aiResult.changes
+        .filter(c => c.start !== change.start || c.end !== change.end)
+        .map(c => {
+          if (c.start > change.start) {
+            return { ...c, start: c.start + lengthDiff, end: c.end + lengthDiff };
+          }
+          return c;
+        });
+      if (updatedChanges.length === 0) {
+        setAiResult(null);
+      } else {
+        setAiResult({ ...aiResult, changes: updatedChanges });
+      }
+    }
+    logEvent("ai_correction_accepted_single");
+  };
+
   const handleQuickFix = useCallback((pos: number) => {
     const issue = issues.find(i => pos >= i.start && pos <= i.end);
     if (!issue || issue.suggestions.length === 0) return;
@@ -574,6 +648,16 @@ function App() {
               {" "}Coach Me
             </button>
             <div className="toolbar-separator" />
+            <button
+              className={`toolbar-btn ai-check-btn ${aiLoading ? "active" : ""}`}
+              onClick={handleAiCheck}
+              disabled={aiLoading || !text.trim()}
+              title="AI grammar check (no server needed)"
+            >
+              {aiLoading && <span className="spinner" />}
+              {" "}AI Check
+            </button>
+            <div className="toolbar-separator" />
             <button className="toolbar-btn toolbar-btn-icon" onClick={handleCopyAll} title="Copy all text">
               Copy
             </button>
@@ -615,6 +699,14 @@ function App() {
             }}
           />
 
+          <AiCorrections
+            result={aiResult}
+            loading={aiLoading}
+            onAcceptAll={handleAcceptAllAi}
+            onAcceptChange={handleAcceptAiChange}
+            onDismiss={() => setAiResult(null)}
+          />
+
           <Suspense fallback={null}>
             <RewritePanel
               rewriteResult={rewriteResult}
@@ -631,7 +723,7 @@ function App() {
       </div>
 
       <div className="footer">
-        <span>Ghostpen v0.4.0 -- Your writing never leaves your machine</span>
+        <span>Ghostpen v0.5.0 -- Your writing never leaves your machine</span>
         <span className="footer-stats">
           {wordsToday > 0 && <span className="words-today">{wordsToday} words today</span>}
           <span>
