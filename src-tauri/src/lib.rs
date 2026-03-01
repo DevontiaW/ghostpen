@@ -5,9 +5,11 @@ use harper_core::{Document, Dialect};
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
 use regex::Regex;
+use tauri::Manager;
 
 mod audit;
 mod llm;
+mod t5;
 
 #[derive(Serialize, Clone)]
 pub struct GrammarIssue {
@@ -368,6 +370,20 @@ pub struct FeedbackRequest {
     pub mode: String,
 }
 
+/// Correct grammar using local T5 ONNX model
+#[tauri::command]
+async fn correct_grammar_ai(text: String, app: tauri::AppHandle) -> Result<t5::AiCorrectionResult, String> {
+    let models_dir = app.path()
+        .resolve("models", tauri::path::BaseDirectory::Resource)
+        .map_err(|e| format!("Failed to resolve models directory: {}", e))?;
+
+    tokio::task::spawn_blocking(move || {
+        t5::correct_text(&text, models_dir)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
 /// Save user feedback on a rewrite to ~/.ghostpen/feedback.jsonl
 #[tauri::command]
 fn save_feedback(feedback: FeedbackRequest) -> Result<String, String> {
@@ -421,6 +437,7 @@ pub fn run() {
             check_llm_status,
             launch_llm,
             save_feedback,
+            correct_grammar_ai,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
