@@ -15,21 +15,38 @@ import urllib.request
 MODEL_REPO = "Xenova/grammar-synthesis-small"
 BASE_URL = f"https://huggingface.co/{MODEL_REPO}/resolve/main"
 
+# (remote_path, local_name, expected_min_bytes)
 FILES = [
-    ("onnx/encoder_model_quantized.onnx", "encoder_model_quantized.onnx"),
-    ("onnx/decoder_model_merged_quantized.onnx", "decoder_model_merged_quantized.onnx"),
-    ("tokenizer.json", "tokenizer.json"),
+    ("onnx/encoder_model_quantized.onnx", "encoder_model_quantized.onnx", 50_000_000),
+    ("onnx/decoder_model_merged_quantized.onnx", "decoder_model_merged_quantized.onnx", 50_000_000),
+    ("tokenizer.json", "tokenizer.json", 1_000),
 ]
 
-def download_file(url, dest):
-    """Download a file with progress indication."""
+def download_file(url, dest, min_bytes):
+    """Download a file to a temp path, validate, then atomically rename."""
+    tmp_dest = dest + ".download"
     print(f"Downloading {os.path.basename(dest)}...")
     try:
-        urllib.request.urlretrieve(url, dest, reporthook=progress_hook)
+        urllib.request.urlretrieve(url, tmp_dest, reporthook=progress_hook)
         print()  # newline after progress
     except Exception as e:
+        # Clean up partial download
+        if os.path.exists(tmp_dest):
+            os.remove(tmp_dest)
         print(f"\nError downloading {url}: {e}")
         sys.exit(1)
+
+    # Validate file size
+    actual_size = os.path.getsize(tmp_dest)
+    if actual_size < min_bytes:
+        os.remove(tmp_dest)
+        print(f"  ERROR: Downloaded file too small ({actual_size} bytes, expected >= {min_bytes}). Possibly corrupt or incomplete.")
+        sys.exit(1)
+
+    # Atomic rename (overwrite existing if re-downloading)
+    if os.path.exists(dest):
+        os.remove(dest)
+    os.rename(tmp_dest, dest)
 
 def progress_hook(block_num, block_size, total_size):
     """Show download progress."""
@@ -52,14 +69,25 @@ def main():
     print(f"Source: {MODEL_REPO}")
     print()
 
-    for remote_path, local_name in FILES:
+    for remote_path, local_name, min_bytes in FILES:
         dest = os.path.join(models_dir, local_name)
         if os.path.exists(dest):
-            size_mb = os.path.getsize(dest) / (1024 * 1024)
-            print(f"  {local_name} already exists ({size_mb:.1f} MB) — skipping")
-            continue
+            size = os.path.getsize(dest)
+            if size >= min_bytes:
+                size_mb = size / (1024 * 1024)
+                print(f"  {local_name} already exists ({size_mb:.1f} MB) -- skipping")
+                continue
+            else:
+                print(f"  {local_name} exists but too small ({size} bytes) -- re-downloading")
         url = f"{BASE_URL}/{remote_path}"
-        download_file(url, dest)
+        download_file(url, dest, min_bytes)
+
+    # Clean up any stale .download temp files
+    for f in os.listdir(models_dir):
+        if f.endswith(".download"):
+            stale = os.path.join(models_dir, f)
+            os.remove(stale)
+            print(f"  Cleaned up stale temp file: {f}")
 
     print()
     print("Done! Model files are ready for bundling.")
@@ -67,16 +95,25 @@ def main():
 
     # Verify files
     total_size = 0
-    for _, local_name in FILES:
+    all_ok = True
+    for _, local_name, min_bytes in FILES:
         path = os.path.join(models_dir, local_name)
         if os.path.exists(path):
             size = os.path.getsize(path)
             total_size += size
-            print(f"  {local_name}: {size / (1024 * 1024):.1f} MB")
+            status = "OK" if size >= min_bytes else "WARNING: too small"
+            if size < min_bytes:
+                all_ok = False
+            print(f"  {local_name}: {size / (1024 * 1024):.1f} MB [{status}]")
         else:
             print(f"  WARNING: {local_name} not found!")
+            all_ok = False
 
     print(f"\n  Total: {total_size / (1024 * 1024):.1f} MB")
+
+    if not all_ok:
+        print("\n  Some files are missing or invalid. Re-run this script.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

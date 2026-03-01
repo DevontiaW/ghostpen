@@ -212,7 +212,7 @@
   border-left: 1px solid #e8e8ec;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .sidebar-header {
@@ -911,6 +911,14 @@
 .ai-change-arrow {
   color: #9ca3af;
   margin: 0 4px;
+}
+
+.ai-change-insert-label {
+  color: #7c3aed;
+  font-size: 12px;
+  font-weight: 500;
+  font-style: italic;
+  margin-right: 4px;
 }
 
 .ai-change-accept {

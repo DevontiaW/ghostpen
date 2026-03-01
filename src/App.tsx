@@ -17,6 +17,7 @@ import OnboardingWizard from "./components/OnboardingWizard";
 import type { GrammarIssue, CheckResult } from "./components/Editor";
 // Type-only import doesn't affect code splitting
 import type { RewriteResult } from "./components/RewritePanel";
+import type { TextChange, AiCorrectionResult } from "./types/ai";
 import { logEvent } from "./logger";
 import "./App.css";
 
@@ -24,19 +25,6 @@ interface LlmStatus {
   available: boolean;
   provider: string;
   model: string;
-}
-
-interface TextChange {
-  start: number;
-  end: number;
-  original: string;
-  replacement: string;
-}
-
-interface AiCorrectionResult {
-  original: string;
-  corrected: string;
-  changes: TextChange[];
 }
 
 const DRAFT_KEY = "ghostpen-draft";
@@ -130,6 +118,7 @@ function App() {
       setText(content);
       setCurrentFilePath(path);
       setIsDirty(false);
+      setAiResult(null);
       lastWordCountRef.current = content.split(/\s+/).filter(Boolean).length;
       localStorage.removeItem(DRAFT_KEY);
       setRecentFiles(addToRecentFiles(path));
@@ -180,6 +169,7 @@ function App() {
       setText(content);
       setCurrentFilePath(path);
       setIsDirty(false);
+      setAiResult(null);
       lastWordCountRef.current = content.split(/\s+/).filter(Boolean).length;
       localStorage.removeItem(DRAFT_KEY);
       setRecentFiles(addToRecentFiles(path));
@@ -417,13 +407,19 @@ function App() {
     if (aiResult) {
       const lengthDiff = change.replacement.length - (change.end - change.start);
       const updatedChanges = aiResult.changes
-        .filter(c => c.start !== change.start || c.end !== change.end)
+        .filter(c => !(c.start === change.start && c.end === change.end && c.replacement === change.replacement))
         .map(c => {
-          if (c.start > change.start) {
+          if (c.start >= change.end) {
+            // Change is entirely after the accepted one — shift both offsets
             return { ...c, start: c.start + lengthDiff, end: c.end + lengthDiff };
           }
+          if (c.start > change.start && c.start < change.end) {
+            // Overlapping change — invalidate by removing (shouldn't happen in practice)
+            return null;
+          }
           return c;
-        });
+        })
+        .filter((c): c is TextChange => c !== null);
       if (updatedChanges.length === 0) {
         setAiResult(null);
       } else {

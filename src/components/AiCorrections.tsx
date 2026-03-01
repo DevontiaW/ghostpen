@@ -1,17 +1,5 @@
 import { memo } from "react";
-
-interface TextChange {
-  start: number;
-  end: number;
-  original: string;
-  replacement: string;
-}
-
-interface AiCorrectionResult {
-  original: string;
-  corrected: string;
-  changes: TextChange[];
-}
+import type { TextChange, AiCorrectionResult } from "../types/ai";
 
 interface Props {
   result: AiCorrectionResult | null;
@@ -71,8 +59,14 @@ export default memo(function AiCorrections({
       {result!.changes.map((change, i) => (
         <div key={`${change.start}-${change.end}-${i}`} className="ai-change-card">
           <div className="ai-change-text">
-            <span className="ai-change-removed">{change.original}</span>
-            <span className="ai-change-arrow">&rarr;</span>
+            {change.original ? (
+              <>
+                <span className="ai-change-removed">{change.original}</span>
+                <span className="ai-change-arrow">&rarr;</span>
+              </>
+            ) : (
+              <span className="ai-change-insert-label">insert:</span>
+            )}
             <span className="ai-change-added">{change.replacement}</span>
           </div>
           <button
