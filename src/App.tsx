@@ -109,6 +109,7 @@ function App() {
     setIsDirty(false);
     setIssues([]);
     setRewriteResult(null);
+    setAiResult(null);
     lastWordCountRef.current = 0;
     localStorage.removeItem(DRAFT_KEY);
     logEvent("new_document");
@@ -377,11 +378,15 @@ function App() {
       const result = await invoke<AiCorrectionResult>("correct_grammar_ai", { text });
       setAiResult(result);
     } catch (err) {
-      setAiResult({
-        original: text,
-        corrected: text,
-        changes: [],
-      });
+      const errStr = String(err);
+      // Surface model-missing or other errors clearly instead of hiding them
+      if (errStr.includes("download") || errStr.includes("not found") || errStr.includes("Failed to load")) {
+        showToast("AI model not installed. Run: python scripts/download-model.py");
+      } else if (errStr.includes("too long")) {
+        showToast(errStr);
+      } else {
+        showToast("AI check failed. Check console for details.");
+      }
       console.error("AI check failed:", err);
     } finally {
       setAiLoading(false);
@@ -404,8 +409,10 @@ function App() {
   const handleAcceptAiChange = (change: TextChange) => {
     const view = editorRef.current?.view;
     if (!view) return;
+    const annotation = isolateHistory.of("full");
     view.dispatch({
       changes: { from: change.start, to: change.end, insert: change.replacement },
+      annotations: annotation,
     });
     if (aiResult) {
       const lengthDiff = change.replacement.length - (change.end - change.start);
@@ -485,6 +492,8 @@ function App() {
   const handleTextChange = (newText: string) => {
     setText(newText);
     setIsDirty(true);
+    // Invalidate stale AI corrections — offsets are wrong after any edit
+    if (aiResult) setAiResult(null);
 
     // Track writing stats — count words added
     const newWordCount = newText.split(/\s+/).filter(Boolean).length;
