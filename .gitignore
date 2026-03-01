@@ -27,3 +27,10 @@ dist-ssr
 *.sln
 *.sw?
 .claude/worktrees/
+
+# AI model files (download via scripts/download-model.py)
+src-tauri/resources/models/*.onnx
+src-tauri/resources/models/*.bin
+
+# Rust build
+src-tauri/target/
