@@ -274,6 +274,8 @@
   padding: 16px 20px;
   border-top: 1px solid #f0f0f3;
   background: #faf5ff;
+  max-height: 50vh;
+  overflow-y: auto;
 }
 
 .rewrite-result {
@@ -299,6 +301,44 @@
   background: #f5f3ff;
   border-radius: 6px;
   border-left: 3px solid #7c3aed;
+}
+
+/* Markdown rendering in rewrite panel */
+.rewrite-text p,
+.rewrite-explanation p {
+  margin-bottom: 8px;
+}
+
+.rewrite-text p:last-child,
+.rewrite-explanation p:last-child {
+  margin-bottom: 0;
+}
+
+.rewrite-text strong,
+.rewrite-explanation strong {
+  font-weight: 600;
+  color: inherit;
+}
+
+.rewrite-text ol,
+.rewrite-text ul,
+.rewrite-explanation ol,
+.rewrite-explanation ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.rewrite-text li,
+.rewrite-explanation li {
+  margin-bottom: 4px;
+}
+
+.rewrite-text code,
+.rewrite-explanation code {
+  background: rgba(124, 58, 237, 0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
 }
 
 .rewrite-actions {
@@ -492,6 +532,11 @@
     background: #0f0f14;
     border-color: #3d3d4e;
     color: #e5e7eb;
+  }
+
+  .rewrite-text code,
+  .rewrite-explanation code {
+    background: rgba(124, 58, 237, 0.2);
   }
 
   .rewrite-explanation {

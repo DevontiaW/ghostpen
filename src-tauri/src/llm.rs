@@ -80,9 +80,13 @@ async fn detect_provider() -> Result<(Provider, String, String), Box<dyn std::er
         .await
     {
         if resp.status().is_success() {
-            // Parse the actual model name from the response
+            // Parse the actual model name — skip embedding models, pick first chat-capable one
             let model_name = if let Ok(models) = resp.json::<ModelsResponse>().await {
-                models.data.first().map(|m| m.id.clone()).unwrap_or_else(|| LMSTUDIO_MODEL.to_string())
+                models.data.iter()
+                    .find(|m| !m.id.contains("embed"))
+                    .or_else(|| models.data.first())
+                    .map(|m| m.id.clone())
+                    .unwrap_or_else(|| LMSTUDIO_MODEL.to_string())
             } else {
                 LMSTUDIO_MODEL.to_string()
             };

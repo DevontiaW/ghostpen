@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import Markdown from "react-markdown";
 
 interface RewriteResult {
   rewritten: string;
@@ -20,7 +21,6 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, streamingT
   const [feedbackGiven, setFeedbackGiven] = useState(false);
   const [showThanks, setShowThanks] = useState(false);
 
-  // Reset feedback state when rewrite result changes
   const handleFeedback = (rating: "good" | "bad") => {
     if (feedbackGiven || !rewriteResult?.rewritten) return;
     setFeedbackGiven(true);
@@ -29,7 +29,6 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, streamingT
     setTimeout(() => setShowThanks(false), 1000);
   };
 
-  // Reset when result is dismissed
   useEffect(() => {
     if (!rewriteResult) {
       setFeedbackGiven(false);
@@ -38,6 +37,8 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, streamingT
   }, [rewriteResult]);
 
   if (!rewriteResult && !rewriteLoading) return null;
+
+  const isCoachMode = mode === "explain";
 
   return (
     <div className="rewrite-panel">
@@ -52,28 +53,51 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, streamingT
             )}
           </>
         ) : (
-          "Suggestion"
+          isCoachMode ? "Writing Coach" : "Rewrite Suggestion"
         )}
       </div>
 
       {rewriteLoading && streamingText && (
         <div className="rewrite-result">
-          <div className="rewrite-text" style={{ opacity: 0.8 }}>{streamingText}</div>
+          <div className="rewrite-text" style={{ opacity: 0.8 }}>
+            <Markdown>{streamingText}</Markdown>
+          </div>
         </div>
       )}
 
       {rewriteResult && (
         <div className="rewrite-result">
-          {rewriteResult.rewritten && (
-            <div className="rewrite-text">{rewriteResult.rewritten}</div>
+          {rewriteResult.rewritten && !isCoachMode && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: "#7c3aed", letterSpacing: "0.5px", marginBottom: 4 }}>
+                Suggested rewrite
+              </div>
+              <div className="rewrite-text">
+                <Markdown>{rewriteResult.rewritten}</Markdown>
+              </div>
+            </>
+          )}
+          {rewriteResult.rewritten && isCoachMode && (
+            <div className="rewrite-text">
+              <Markdown>{rewriteResult.rewritten}</Markdown>
+            </div>
           )}
           {rewriteResult.explanation && (
-            <div className="rewrite-explanation">{rewriteResult.explanation}</div>
+            <>
+              {!isCoachMode && (
+                <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", color: "#6b7280", letterSpacing: "0.5px", marginBottom: 4, marginTop: 8 }}>
+                  Why this is better
+                </div>
+              )}
+              <div className="rewrite-explanation">
+                <Markdown>{rewriteResult.explanation}</Markdown>
+              </div>
+            </>
           )}
           {(rewriteResult.rewritten || rewriteResult.explanation) && (
             <div className="rewrite-actions">
-              {rewriteResult.rewritten && mode !== "explain" && (
-                <button className="btn-apply" onClick={onApply}>Apply</button>
+              {rewriteResult.rewritten && !isCoachMode && (
+                <button className="btn-apply" onClick={onApply}>Apply Rewrite</button>
               )}
               <button className="toolbar-btn" onClick={onDismiss}>Dismiss</button>
               <div className="feedback-group">
@@ -81,7 +105,7 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, streamingT
                   className={`feedback-btn ${feedbackGiven ? "disabled" : ""}`}
                   onClick={() => handleFeedback("good")}
                   disabled={feedbackGiven}
-                  title="Good rewrite"
+                  title="Helpful"
                 >
                   Good
                 </button>
@@ -89,7 +113,7 @@ export default function RewritePanel({ rewriteResult, rewriteLoading, streamingT
                   className={`feedback-btn ${feedbackGiven ? "disabled" : ""}`}
                   onClick={() => handleFeedback("bad")}
                   disabled={feedbackGiven}
-                  title="Bad rewrite"
+                  title="Not helpful"
                 >
                   Bad
                 </button>
