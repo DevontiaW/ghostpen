@@ -98,6 +98,34 @@
   color: #059669;
 }
 
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.help-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.help-btn:hover {
+  background: #f5f3ff;
+  border-color: #7c3aed;
+  color: #7c3aed;
+}
+
 /* Main layout */
 .main {
   display: flex;
@@ -269,6 +297,15 @@
   background: #ddd6fe;
 }
 
+.dict-chip {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.dict-chip:hover {
+  background: #dcfce7;
+}
+
 /* Rewrite panel */
 .rewrite-panel {
   padding: 16px 20px;
@@ -415,6 +452,17 @@
   text-decoration: none;
 }
 
+.footer-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.words-today {
+  color: #7c3aed;
+  font-weight: 500;
+}
+
 /* LLM launch button */
 .launch-llm-btn {
   padding: 4px 12px;
@@ -507,6 +555,63 @@
   border-radius: 50%;
   background: #f59e0b;
   margin-left: 2px;
+}
+
+/* Recent files dropdown */
+.file-name-group {
+  position: relative;
+}
+
+.file-name {
+  cursor: pointer;
+}
+
+.recent-arrow {
+  font-size: 10px;
+  margin-left: 4px;
+  color: #9ca3af;
+}
+
+.recent-files-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  min-width: 280px;
+  z-index: 100;
+  overflow: hidden;
+}
+
+.recent-file-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.1s;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-file-item:hover {
+  background: #f5f3ff;
+}
+
+.recent-file-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.recent-file-path {
+  font-size: 11px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
 }
 
 /* Copy/Export toolbar buttons */
@@ -821,6 +926,30 @@
 
   .file-name {
     color: #9ca3af;
+  }
+
+  .help-btn {
+    background: #1a1a24;
+    border-color: #2d2d3a;
+    color: #9ca3af;
+  }
+
+  .help-btn:hover {
+    background: #2d2d3a;
+    color: #7c3aed;
+  }
+
+  .recent-files-dropdown {
+    background: #1a1a24;
+    border-color: #2d2d3a;
+  }
+
+  .recent-file-item:hover {
+    background: #2d2d3a;
+  }
+
+  .recent-file-name {
+    color: #e5e7eb;
   }
 
   .toast {

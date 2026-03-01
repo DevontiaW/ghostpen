@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import type { GrammarIssue } from "./Editor";
 
 interface IssueSidebarProps {
@@ -5,6 +6,7 @@ interface IssueSidebarProps {
   text: string;
   onApplySuggestion: (issue: GrammarIssue, suggestion: string) => void;
   onScrollToIssue: (issue: GrammarIssue) => void;
+  onDictionaryAdd?: () => void;
 }
 
 function issueSeverityClass(severity: string): string {
@@ -14,7 +16,22 @@ function issueSeverityClass(severity: string): string {
   return "warning";
 }
 
-export default function IssueSidebar({ issues, text, onApplySuggestion, onScrollToIssue }: IssueSidebarProps) {
+export default function IssueSidebar({ issues, text, onApplySuggestion, onScrollToIssue, onDictionaryAdd }: IssueSidebarProps) {
+  const handleAddToDictionary = async (issue: GrammarIssue) => {
+    const word = text.substring(issue.start, issue.end).trim();
+    if (!word) return;
+    try {
+      await invoke("add_to_dictionary", { word });
+      onDictionaryAdd?.();
+    } catch (err) {
+      console.error("Failed to add to dictionary:", err);
+    }
+  };
+
+  const isSpellingIssue = (severity: string): boolean => {
+    const s = severity.toLowerCase();
+    return s.includes("spell") || s.includes("error");
+  };
   const getIssueSnippet = (issue: GrammarIssue): string => {
     return text.substring(issue.start, issue.end);
   };
@@ -64,6 +81,17 @@ export default function IssueSidebar({ issues, text, onApplySuggestion, onScroll
                     {s}
                   </button>
                 ))}
+                {isSpellingIssue(issue.severity) && (
+                  <button
+                    className="suggestion-chip dict-chip"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleAddToDictionary(issue);
+                    }}
+                  >
+                    + Dictionary
+                  </button>
+                )}
               </div>
             )}
           </div>

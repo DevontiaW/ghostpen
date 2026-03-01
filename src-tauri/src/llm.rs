@@ -267,6 +267,9 @@ pub async fn rewrite(text: &str, mode: &str, app_handle: Option<&tauri::AppHandl
             .unwrap_or_default()
     };
 
+    // Validate response before parsing
+    validate_response(&full, text).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+
     // Parse response — try to split rewrite from explanation
     let (rewritten, explanation) = parse_response(&full);
 
@@ -276,7 +279,46 @@ pub async fn rewrite(text: &str, mode: &str, app_handle: Option<&tauri::AppHandl
     })
 }
 
-fn parse_response(full: &str) -> (String, String) {
+/// Validate LLM response for common failure modes
+pub(crate) fn validate_response(response: &str, original_text: &str) -> Result<(), String> {
+    let trimmed = response.trim();
+
+    // Empty response
+    if trimmed.is_empty() {
+        return Err("LLM returned an empty response. Try again or use a different model.".to_string());
+    }
+
+    // Repetition loops: any substring of 20+ chars repeated 3+ times consecutively
+    let bytes = trimmed.as_bytes();
+    for window_size in 20..=trimmed.len() / 3 {
+        let mut i = 0;
+        while i + window_size * 3 <= bytes.len() {
+            let pattern = &bytes[i..i + window_size];
+            if &bytes[i + window_size..i + window_size * 2] == pattern
+                && &bytes[i + window_size * 2..i + window_size * 3] == pattern
+            {
+                return Err("LLM response contains repetitive loops. Try again with a different model.".to_string());
+            }
+            i += 1;
+        }
+        // Only check a few window sizes to avoid O(n^3)
+        if window_size > 60 { break; }
+    }
+
+    // Length explosion: response > 5x input
+    if !original_text.is_empty() && trimmed.len() > original_text.len() * 5 {
+        return Err("LLM response is suspiciously long (>5x input). Discarding.".to_string());
+    }
+
+    // Non-printable chars (allow newlines, tabs, carriage returns)
+    if trimmed.chars().any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t') {
+        return Err("LLM response contains non-printable characters. Try again.".to_string());
+    }
+
+    Ok(())
+}
+
+pub(crate) fn parse_response(full: &str) -> (String, String) {
     // Try various delimiter patterns
     for delimiter in &["EXPLANATION:", "**Explanation:**", "**Why:**", "\nExplanation:", "\n\n**Changes"] {
         if let Some(idx) = full.find(delimiter) {
@@ -320,5 +362,73 @@ fn build_prompt(text: &str, mode: &str) -> String {
         _ => format!(
             "Improve this text for clarity and correctness.\n\nFirst, provide the improved text. Then write EXPLANATION: followed by a brief teaching note.\n\nText: {}", text
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- parse_response tests ---
+
+    #[test]
+    fn parse_with_explanation_delimiter() {
+        let (rewrite, explanation) = parse_response("Better text here.\nEXPLANATION: I made it clearer.");
+        assert_eq!(rewrite, "Better text here.");
+        assert_eq!(explanation, "I made it clearer.");
+    }
+
+    #[test]
+    fn parse_with_why_delimiter() {
+        let (rewrite, explanation) = parse_response("Improved text.\n**Why:** This flows better.");
+        assert_eq!(rewrite, "Improved text.");
+        assert_eq!(explanation, "This flows better.");
+    }
+
+    #[test]
+    fn parse_no_delimiter() {
+        let (rewrite, explanation) = parse_response("Just the rewritten text without explanation.");
+        assert_eq!(rewrite, "Just the rewritten text without explanation.");
+        assert!(explanation.is_empty());
+    }
+
+    #[test]
+    fn parse_empty_input() {
+        let (rewrite, explanation) = parse_response("");
+        assert!(rewrite.is_empty());
+        assert!(explanation.is_empty());
+    }
+
+    // --- validate_response tests ---
+
+    #[test]
+    fn validate_rejects_empty() {
+        let result = validate_response("   ", "some input");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn validate_rejects_repetition() {
+        // 20+ char pattern repeated 3x
+        let repeated = "This is a repeated segment.".repeat(3);
+        let result = validate_response(&repeated, "short input");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("repetitive"));
+    }
+
+    #[test]
+    fn validate_rejects_length_explosion() {
+        let short_input = "Hello.";
+        let long_output = "x".repeat(short_input.len() * 6);
+        let result = validate_response(&long_output, short_input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("long"));
+    }
+
+    #[test]
+    fn validate_accepts_valid() {
+        let result = validate_response("This is a perfectly fine rewrite.", "Original text here.");
+        assert!(result.is_ok());
     }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -7,12 +7,14 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 import Editor from "./components/Editor";
 import { highlightEffect } from "./components/Editor";
 import IssueSidebar from "./components/IssueSidebar";
-import RewritePanel from "./components/RewritePanel";
+const RewritePanel = lazy(() => import("./components/RewritePanel"));
 import OnboardingWizard from "./components/OnboardingWizard";
 import type { GrammarIssue, CheckResult } from "./components/Editor";
+// Type-only import doesn't affect code splitting
 import type { RewriteResult } from "./components/RewritePanel";
 import { logEvent } from "./logger";
 import "./App.css";
@@ -25,6 +27,22 @@ interface LlmStatus {
 
 const DRAFT_KEY = "ghostpen-draft";
 const ONBOARDED_KEY = "ghostpen-onboarded";
+const RECENT_FILES_KEY = "ghostpen-recent-files";
+const WRITING_STATS_KEY = "ghostpen-writing-stats";
+
+interface RecentFile {
+  path: string;
+  name: string;
+}
+
+function addToRecentFiles(path: string): RecentFile[] {
+  const name = path.split(/[/\\]/).pop() || path;
+  const existing: RecentFile[] = JSON.parse(localStorage.getItem(RECENT_FILES_KEY) || "[]");
+  const filtered = existing.filter(f => f.path !== path);
+  const updated = [{ path, name }, ...filtered].slice(0, 5);
+  localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(updated));
+  return updated;
+}
 
 function App() {
   const [text, setText] = useState("");
@@ -42,6 +60,12 @@ function App() {
   const [isDirty, setIsDirty] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() =>
+    JSON.parse(localStorage.getItem(RECENT_FILES_KEY) || "[]")
+  );
+  const [showRecentFiles, setShowRecentFiles] = useState(false);
+  const [wordsToday, setWordsToday] = useState(0);
+  const lastWordCountRef = useRef(0);
   const editorRef = useRef<ReactCodeMirrorRef | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,6 +78,16 @@ function App() {
   };
 
   // --- File operations ---
+  const handleNew = useCallback(() => {
+    setText("");
+    setCurrentFilePath(null);
+    setIsDirty(false);
+    setIssues([]);
+    setRewriteResult(null);
+    localStorage.removeItem(DRAFT_KEY);
+    logEvent("new_document");
+  }, []);
+
   const handleOpen = useCallback(async () => {
     try {
       const selected = await open({
@@ -70,6 +104,7 @@ function App() {
       setCurrentFilePath(path);
       setIsDirty(false);
       localStorage.removeItem(DRAFT_KEY);
+      setRecentFiles(addToRecentFiles(path));
       logEvent("file_opened", { path });
     } catch (err) {
       console.error("Failed to open file:", err);
@@ -89,6 +124,7 @@ function App() {
       setCurrentFilePath(path);
       setIsDirty(false);
       showToast("Saved");
+      setRecentFiles(addToRecentFiles(path));
       logEvent("file_saved_as", { path });
     } catch (err) {
       console.error("Failed to save file:", err);
@@ -109,6 +145,22 @@ function App() {
       handleSaveAs();
     }
   }, [currentFilePath, text, handleSaveAs]);
+
+  const openRecentFile = useCallback(async (path: string) => {
+    try {
+      const content = await readTextFile(path);
+      setText(content);
+      setCurrentFilePath(path);
+      setIsDirty(false);
+      localStorage.removeItem(DRAFT_KEY);
+      setRecentFiles(addToRecentFiles(path));
+      setShowRecentFiles(false);
+      logEvent("file_opened_recent", { path });
+    } catch (err) {
+      console.error("Failed to open recent file:", err);
+      showToast("Failed to open file");
+    }
+  }, []);
 
   const handleCopyAll = useCallback(async () => {
     try {
@@ -138,10 +190,10 @@ function App() {
   }, [text]);
 
   // Expose file handlers for Editor keybindings
-  const fileHandlersRef = useRef({ handleOpen, handleSave, handleSaveAs });
+  const fileHandlersRef = useRef({ handleNew, handleOpen, handleSave, handleSaveAs });
   useEffect(() => {
-    fileHandlersRef.current = { handleOpen, handleSave, handleSaveAs };
-  }, [handleOpen, handleSave, handleSaveAs]);
+    fileHandlersRef.current = { handleNew, handleOpen, handleSave, handleSaveAs };
+  }, [handleNew, handleOpen, handleSave, handleSaveAs]);
 
   // --- Onboarding check ---
   useEffect(() => {
@@ -150,11 +202,19 @@ function App() {
     }
   }, []);
 
+  // --- Writing stats: load today's count on mount ---
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const stats: Record<string, number> = JSON.parse(localStorage.getItem(WRITING_STATS_KEY) || "{}");
+    setWordsToday(stats[today] || 0);
+  }, []);
+
   // --- Restore draft from localStorage on mount ---
   useEffect(() => {
     const savedDraft = localStorage.getItem(DRAFT_KEY);
     if (savedDraft && !currentFilePath) {
       setText(savedDraft);
+      lastWordCountRef.current = savedDraft.split(/\s+/).filter(Boolean).length;
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -291,10 +351,17 @@ function App() {
     const view = editorRef.current?.view;
     if (!view) return;
     const capturedRange = rewriteSelectionRef.current;
+    const annotation = isolateHistory.of("full");
     if (capturedRange) {
-      view.dispatch({ changes: { from: capturedRange.from, to: capturedRange.to, insert: rewriteResult.rewritten } });
+      view.dispatch({
+        changes: { from: capturedRange.from, to: capturedRange.to, insert: rewriteResult.rewritten },
+        annotations: annotation,
+      });
     } else {
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: rewriteResult.rewritten } });
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: rewriteResult.rewritten },
+        annotations: annotation,
+      });
     }
     setRewriteResult(null);
     setSelectedText("");
@@ -320,6 +387,25 @@ function App() {
   const handleTextChange = (newText: string) => {
     setText(newText);
     setIsDirty(true);
+
+    // Track writing stats — count words added
+    const newWordCount = newText.split(/\s+/).filter(Boolean).length;
+    const delta = newWordCount - lastWordCountRef.current;
+    lastWordCountRef.current = newWordCount;
+    if (delta > 0) {
+      const today = new Date().toISOString().slice(0, 10);
+      const stats: Record<string, number> = JSON.parse(localStorage.getItem(WRITING_STATS_KEY) || "{}");
+      stats[today] = (stats[today] || 0) + delta;
+      // Prune entries older than 30 days
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
+      for (const key of Object.keys(stats)) {
+        if (key < cutoffStr) delete stats[key];
+      }
+      localStorage.setItem(WRITING_STATS_KEY, JSON.stringify(stats));
+      setWordsToday(stats[today]);
+    }
 
     // Debounced auto-save to localStorage (1s)
     if (autoSaveTimerRef.current) {
@@ -355,8 +441,21 @@ function App() {
       <div className="header">
         <div className="header-left">
           <div className="logo">Ghost<span>pen</span></div>
-          <div className="file-name">
-            {displayName}{isDirty && <span className="dirty-dot" title="Unsaved changes" />}
+          <div className="file-name-group">
+            <div className="file-name" onClick={() => recentFiles.length > 0 && setShowRecentFiles(!showRecentFiles)}>
+              {displayName}{isDirty && <span className="dirty-dot" title="Unsaved changes" />}
+              {recentFiles.length > 0 && <span className="recent-arrow">{showRecentFiles ? "\u25B4" : "\u25BE"}</span>}
+            </div>
+            {showRecentFiles && recentFiles.length > 0 && (
+              <div className="recent-files-dropdown">
+                {recentFiles.map((f, i) => (
+                  <div key={i} className="recent-file-item" onClick={() => openRecentFile(f.path)}>
+                    <span className="recent-file-name">{f.name}</span>
+                    <span className="recent-file-path">{f.path}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className={`status-badge ${llmStatus.available ? "connected" : "disconnected"}`}>
             <div className="status-dot" />
@@ -402,19 +501,28 @@ function App() {
             </span>
           )}
         </div>
-        <div className="stats">
-          <div className="stat-item">
-            <span className="stat-value">{stats.word_count}</span> words
+        <div className="header-right">
+          <div className="stats">
+            <div className="stat-item">
+              <span className="stat-value">{stats.word_count}</span> words
+            </div>
+            <div className="stat-item">
+              <span className="stat-value">{stats.sentence_count}</span> sentences
+            </div>
+            <div className="stat-item">
+              <span className={`issues-count ${stats.issue_count === 0 ? "clean" : ""}`}>
+                {stats.issue_count}
+              </span>
+              {" "}issues
+            </div>
           </div>
-          <div className="stat-item">
-            <span className="stat-value">{stats.sentence_count}</span> sentences
-          </div>
-          <div className="stat-item">
-            <span className={`issues-count ${stats.issue_count === 0 ? "clean" : ""}`}>
-              {stats.issue_count}
-            </span>
-            {" "}issues
-          </div>
+          <button
+            className="help-btn"
+            onClick={() => setShowOnboarding(true)}
+            title="Show help"
+          >
+            ?
+          </button>
         </div>
       </div>
 
@@ -472,28 +580,43 @@ function App() {
             text={text}
             onApplySuggestion={applySuggestion}
             onScrollToIssue={scrollToIssue}
+            onDictionaryAdd={() => {
+              // Force grammar re-check by dispatching a no-op change
+              const view = editorRef.current?.view;
+              if (view) {
+                // Insert and remove a space to trigger the linter
+                const pos = view.state.doc.length;
+                view.dispatch({ changes: { from: pos, insert: " " } });
+                view.dispatch({ changes: { from: pos, to: pos + 1 } });
+              }
+            }}
           />
 
-          <RewritePanel
-            rewriteResult={rewriteResult}
-            rewriteLoading={rewriteLoading}
-            streamingText={streamingText}
-            onApply={applyRewrite}
-            onDismiss={() => setRewriteResult(null)}
-            onCancel={handleCancelRewrite}
-            onFeedback={handleFeedback}
-            mode={lastUsedMode}
-          />
+          <Suspense fallback={null}>
+            <RewritePanel
+              rewriteResult={rewriteResult}
+              rewriteLoading={rewriteLoading}
+              streamingText={streamingText}
+              onApply={applyRewrite}
+              onDismiss={() => setRewriteResult(null)}
+              onCancel={handleCancelRewrite}
+              onFeedback={handleFeedback}
+              mode={lastUsedMode}
+            />
+          </Suspense>
         </div>
       </div>
 
       <div className="footer">
-        <span>Ghostpen v0.3.0 -- Your writing never leaves your machine</span>
-        <span>
-          {llmStatus.available
-            ? `${llmStatus.provider} (${llmStatus.model})`
-            : "Install Ollama or LM Studio for AI rewrites"
-          }
+        <span>Ghostpen v0.4.0 -- Your writing never leaves your machine</span>
+        <span className="footer-stats">
+          {wordsToday > 0 && <span className="words-today">{wordsToday} words today</span>}
+          <span>
+            {llmStatus.available
+              ? `${llmStatus.provider} (${llmStatus.model})`
+              : "Install Ollama or LM Studio for AI rewrites"
+            }
+          </span>
         </span>
       </div>
 

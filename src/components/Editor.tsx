@@ -3,6 +3,7 @@ import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { EditorView, Decoration, type DecorationSet, keymap } from "@codemirror/view";
 import { StateEffect, StateField } from "@codemirror/state";
 import { linter, type Diagnostic, lintGutter } from "@codemirror/lint";
+import { search, searchKeymap } from "@codemirror/search";
 import { invoke } from "@tauri-apps/api/core";
 
 interface GrammarIssue {
@@ -23,6 +24,7 @@ interface CheckResult {
 }
 
 interface FileHandlers {
+  handleNew: () => void;
   handleOpen: () => void;
   handleSave: () => void;
   handleSaveAs: () => void;
@@ -88,6 +90,14 @@ const quickFixKeymap = keymap.of([{
 }]);
 
 const fileKeymap = keymap.of([
+  {
+    key: "Mod-n",
+    run: () => {
+      fileHandlersCallbackRef?.current?.handleNew();
+      return true;
+    },
+    preventDefault: true,
+  },
   {
     key: "Mod-o",
     run: () => {
@@ -355,6 +365,8 @@ export default function Editor({ value, onChange, onIssuesFound, onSelectionChan
   });
 
   const extensions = [
+    keymap.of(searchKeymap),
+    search(),
     fileKeymap,
     quickFixKeymap,
     grammarLinter,
