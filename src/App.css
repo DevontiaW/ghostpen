@@ -952,6 +952,24 @@
     color: #e5e7eb;
   }
 
+  .dict-chip {
+    background: #052e16;
+    color: #4ade80;
+  }
+
+  .dict-chip:hover {
+    background: #14532d;
+  }
+
+  .suggestion-chip {
+    background: #2d2050;
+    color: #c4b5fd;
+  }
+
+  .suggestion-chip:hover {
+    background: #3d2d6e;
+  }
+
   .toast {
     background: #fff;
     color: #1a1a2e;

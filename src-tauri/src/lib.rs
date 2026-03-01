@@ -143,6 +143,11 @@ fn load_dictionary() -> Vec<String> {
 /// Add a word to the custom dictionary
 #[tauri::command]
 fn add_to_dictionary(word: String) -> Result<String, String> {
+    let trimmed = word.trim();
+    if trimmed.is_empty() {
+        return Ok("ignored".to_string());
+    }
+
     let ghostpen_dir = dirs::home_dir()
         .ok_or_else(|| "Could not determine home directory".to_string())?
         .join(".ghostpen");

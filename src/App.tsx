@@ -35,9 +35,18 @@ interface RecentFile {
   name: string;
 }
 
+function safeParseJSON<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function addToRecentFiles(path: string): RecentFile[] {
   const name = path.split(/[/\\]/).pop() || path;
-  const existing: RecentFile[] = JSON.parse(localStorage.getItem(RECENT_FILES_KEY) || "[]");
+  const existing: RecentFile[] = safeParseJSON(RECENT_FILES_KEY, []);
   const filtered = existing.filter(f => f.path !== path);
   const updated = [{ path, name }, ...filtered].slice(0, 5);
   localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(updated));
@@ -61,7 +70,7 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() =>
-    JSON.parse(localStorage.getItem(RECENT_FILES_KEY) || "[]")
+    safeParseJSON<RecentFile[]>(RECENT_FILES_KEY, [])
   );
   const [showRecentFiles, setShowRecentFiles] = useState(false);
   const [wordsToday, setWordsToday] = useState(0);
@@ -84,6 +93,7 @@ function App() {
     setIsDirty(false);
     setIssues([]);
     setRewriteResult(null);
+    lastWordCountRef.current = 0;
     localStorage.removeItem(DRAFT_KEY);
     logEvent("new_document");
   }, []);
@@ -103,6 +113,7 @@ function App() {
       setText(content);
       setCurrentFilePath(path);
       setIsDirty(false);
+      lastWordCountRef.current = content.split(/\s+/).filter(Boolean).length;
       localStorage.removeItem(DRAFT_KEY);
       setRecentFiles(addToRecentFiles(path));
       logEvent("file_opened", { path });
@@ -152,6 +163,7 @@ function App() {
       setText(content);
       setCurrentFilePath(path);
       setIsDirty(false);
+      lastWordCountRef.current = content.split(/\s+/).filter(Boolean).length;
       localStorage.removeItem(DRAFT_KEY);
       setRecentFiles(addToRecentFiles(path));
       setShowRecentFiles(false);
@@ -202,10 +214,22 @@ function App() {
     }
   }, []);
 
+  // --- Click-outside to dismiss recent files dropdown ---
+  useEffect(() => {
+    if (!showRecentFiles) return;
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest('.file-name-group')) {
+        setShowRecentFiles(false);
+      }
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [showRecentFiles]);
+
   // --- Writing stats: load today's count on mount ---
   useEffect(() => {
     const today = new Date().toISOString().slice(0, 10);
-    const stats: Record<string, number> = JSON.parse(localStorage.getItem(WRITING_STATS_KEY) || "{}");
+    const stats = safeParseJSON<Record<string, number>>(WRITING_STATS_KEY, {});
     setWordsToday(stats[today] || 0);
   }, []);
 
@@ -394,7 +418,7 @@ function App() {
     lastWordCountRef.current = newWordCount;
     if (delta > 0) {
       const today = new Date().toISOString().slice(0, 10);
-      const stats: Record<string, number> = JSON.parse(localStorage.getItem(WRITING_STATS_KEY) || "{}");
+      const stats = safeParseJSON<Record<string, number>>(WRITING_STATS_KEY, {});
       stats[today] = (stats[today] || 0) + delta;
       // Prune entries older than 30 days
       const cutoff = new Date();
@@ -581,13 +605,12 @@ function App() {
             onApplySuggestion={applySuggestion}
             onScrollToIssue={scrollToIssue}
             onDictionaryAdd={() => {
-              // Force grammar re-check by dispatching a no-op change
+              // Force grammar re-check by requesting lint recalculation
               const view = editorRef.current?.view;
               if (view) {
-                // Insert and remove a space to trigger the linter
-                const pos = view.state.doc.length;
-                view.dispatch({ changes: { from: pos, insert: " " } });
-                view.dispatch({ changes: { from: pos, to: pos + 1 } });
+                // Dispatch a no-content transaction to trigger linter re-run
+                // The linter fires on any transaction, even empty ones
+                view.dispatch({});
               }
             }}
           />
